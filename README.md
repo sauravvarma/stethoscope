@@ -1,6 +1,8 @@
 # stethoscope
 
-**Vital signs for your Mac.** See exactly which process is hammering your disk, stalling on I/O, or refusing to let a drive eject — with more vitals (CPU, memory, battery, drive health) on the roadmap.
+**Vital signs for your Mac** — a machine's sense of its own internal state.
+
+See exactly which process is hammering your disk, stalling on I/O, or refusing to let a drive eject — with more vitals (CPU, memory, battery, drive health) on the roadmap.
 
 ![stethoscope disk tui](assets/tui.svg)
 
