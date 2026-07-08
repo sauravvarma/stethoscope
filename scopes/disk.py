@@ -29,7 +29,6 @@ io provider is unreliable, so it is not a dependable spine for this tool.
 No third-party dependencies — system Python 3 + ctypes only.
 """
 
-import ctypes
 import os
 import re
 import sys
@@ -37,143 +36,33 @@ import time
 import signal
 import subprocess
 
+try:
+    from scopes import core
+except ImportError:   # invoked with scopes/ directly on sys.path
+    import core
+
 # ---------------------------------------------------------------------------
-# libproc / rusage bindings
+# shared spine — the sampling machinery lives in core.py (see #1) so cpu,
+# memory and battery reuse it. Re-export the names the CLI, the TUI (disk_tui)
+# and the tests reach for as disk.<name>.
 # ---------------------------------------------------------------------------
 
-_libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
-
-PROC_ALL_PIDS = 1
-RUSAGE_INFO_V2 = 2
-PROC_PIDPATHINFO_MAXSIZE = 4 * 1024
-
-# Declare the ABI of every libproc symbol we bind. Without argtypes ctypes
-# assumes C ints and silently truncates any 64-bit pointer passed as a Python
-# int to 32 bits — a latent footgun as new scopes reuse these bindings.
-_libc.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32,
-                                ctypes.c_void_p, ctypes.c_int]
-_libc.proc_listpids.restype = ctypes.c_int
-_libc.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
-_libc.proc_pid_rusage.restype = ctypes.c_int
-_libc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
-_libc.proc_pidpath.restype = ctypes.c_int
-
-
-class RUsageInfoV2(ctypes.Structure):
-    """Prefix of rusage_info_v2 up to the two fields we need."""
-    _fields_ = [
-        ("ri_uuid", ctypes.c_uint8 * 16),
-        ("ri_user_time", ctypes.c_uint64),
-        ("ri_system_time", ctypes.c_uint64),
-        ("ri_pkg_idle_wkups", ctypes.c_uint64),
-        ("ri_interrupt_wkups", ctypes.c_uint64),
-        ("ri_pageins", ctypes.c_uint64),
-        ("ri_wired_size", ctypes.c_uint64),
-        ("ri_resident_size", ctypes.c_uint64),
-        ("ri_phys_footprint", ctypes.c_uint64),
-        ("ri_proc_start_abstime", ctypes.c_uint64),
-        ("ri_proc_exit_abstime", ctypes.c_uint64),
-        ("ri_child_user_time", ctypes.c_uint64),
-        ("ri_child_system_time", ctypes.c_uint64),
-        ("ri_child_pkg_idle_wkups", ctypes.c_uint64),
-        ("ri_child_interrupt_wkups", ctypes.c_uint64),
-        ("ri_child_pageins", ctypes.c_uint64),
-        ("ri_child_elapsed_abstime", ctypes.c_uint64),
-        ("ri_diskio_bytesread", ctypes.c_uint64),
-        ("ri_diskio_byteswritten", ctypes.c_uint64),
-    ]
-
-
-def list_pids():
-    """Return a list of all pids via proc_listpids(PROC_ALL_PIDS)."""
-    # First call with NULL buffer to learn the required size.
-    needed = _libc.proc_listpids(PROC_ALL_PIDS, 0, None, 0)
-    if needed <= 0:
-        return []
-    count = needed // ctypes.sizeof(ctypes.c_int32)
-    # Over-allocate a little; the pid table can grow between the two calls.
-    count += 32
-    buf = (ctypes.c_int32 * count)()
-    got = _libc.proc_listpids(PROC_ALL_PIDS, 0, buf, ctypes.sizeof(buf))
-    if got <= 0:
-        return []
-    n = got // ctypes.sizeof(ctypes.c_int32)
-    return [buf[i] for i in range(n) if buf[i] != 0]
+list_pids = core.list_pids
+proc_name = core.proc_name
+proc_rusage = core.proc_rusage
+human = core.human
+rate = core.rate
+CLEAR, BOLD, DIM, RESET = core.CLEAR, core.BOLD, core.DIM, core.RESET
 
 
 def proc_diskio(pid):
-    """Return (bytes_read, bytes_written) cumulative for pid, or None if inaccessible."""
-    info = RUsageInfoV2()
-    rc = _libc.proc_pid_rusage(ctypes.c_int(pid), ctypes.c_int(RUSAGE_INFO_V2),
-                               ctypes.byref(info))
-    if rc != 0:
-        return None
-    return (info.ri_diskio_bytesread, info.ri_diskio_byteswritten)
-
-
-_name_cache = {}   # pid -> (start_abstime, name)
-
-
-def _proc_start_abstime(pid):
-    """Mach-absolute start time of pid, or 0 if inaccessible.
-
-    Used to detect PID reuse: the (pid, start_abstime) pair uniquely identifies
-    a process, so a cached name is only trusted while the start time matches.
-    """
-    info = RUsageInfoV2()
-    rc = _libc.proc_pid_rusage(pid, RUSAGE_INFO_V2, ctypes.byref(info))
-    return info.ri_proc_start_abstime if rc == 0 else 0
-
-
-def proc_name(pid):
-    """Best-effort short command name for pid.
-
-    Cached, but keyed on the process start time so that when the kernel reuses a
-    pid for a new process the stale name is dropped and re-resolved — otherwise
-    long-running `top`/TUI sessions mislabel reused pids.
-    """
-    start = _proc_start_abstime(pid)
-    cached = _name_cache.get(pid)
-    if cached is not None and cached[0] == start:
-        return cached[1]
-    buf = ctypes.create_string_buffer(PROC_PIDPATHINFO_MAXSIZE)
-    n = _libc.proc_pidpath(pid, buf, PROC_PIDPATHINFO_MAXSIZE)
-    if n > 0:
-        name = os.path.basename(buf.value.decode("utf-8", "replace"))
-    else:
-        name = "?"
-    _name_cache[pid] = (start, name)
-    return name
-
-
-# ---------------------------------------------------------------------------
-# formatting helpers
-# ---------------------------------------------------------------------------
-
-def human(n):
-    """Human-readable bytes."""
-    n = float(n)
-    for unit in ("B", "K", "M", "G", "T"):
-        if abs(n) < 1024.0:
-            if unit == "B":
-                return "%d%s" % (int(n), unit)
-            return "%.1f%s" % (n, unit)
-        n /= 1024.0
-    return "%.1fP" % n
-
-
-def rate(n):
-    return human(n) + "/s"
-
-
-CLEAR = "\033[2J\033[H"
-BOLD = "\033[1m"
-DIM = "\033[2m"
-RESET = "\033[0m"
+    """(bytes_read, bytes_written) cumulative for pid, or None if inaccessible."""
+    ru = core.proc_rusage(pid)
+    return (ru.read, ru.write) if ru else None
 
 
 def warn_if_not_root():
-    if os.geteuid() != 0:
+    if not core.is_root():
         sys.stderr.write(
             DIM + "note: not running as root — I/O for other users' processes is "
             "hidden and fs_usage will not run. Re-run with sudo for full coverage.\n"
@@ -181,17 +70,13 @@ def warn_if_not_root():
 
 
 # ---------------------------------------------------------------------------
-# data layer — shared by the CLI (cmd_*) and the TUI (diskscope_tui.py)
+# data layer — shared by the CLI (cmd_*) and the TUI (disk_tui.py)
 # ---------------------------------------------------------------------------
 
 def snapshot_diskio():
-    """Return {pid: (bytes_read, bytes_written)} for every accessible process."""
-    snap = {}
-    for pid in list_pids():
-        io = proc_diskio(pid)
-        if io:
-            snap[pid] = io
-    return snap
+    """{pid: (bytes_read, bytes_written)} for every accessible process."""
+    return {pid: (ru.read, ru.write)
+            for pid, ru in core.snapshot_rusage().items()}
 
 
 def rank_io(prev, cur, dt):

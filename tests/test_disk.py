@@ -180,28 +180,10 @@ class TestCollectHolders(unittest.TestCase):
 
 
 class TestProcNameCache(unittest.TestCase):
-    def tearDown(self):
-        disk._name_cache.clear()
-
-    def test_pid_reuse_invalidates_stale_name(self):
-        # regression for #34: a cached entry whose start time no longer matches
-        # must be dropped rather than returned.
-        pid = os.getpid()
-        disk._name_cache[pid] = (-1, "STALE")     # bogus start_abstime
-        self.assertNotEqual(disk.proc_name(pid), "STALE")
-
-    def test_cache_hit_when_start_time_matches(self):
-        def fake_pidpath(p, buf, size):
-            buf.value = b"/usr/bin/foo"
-            return len(b"/usr/bin/foo")
-
-        with mock.patch.object(disk, "_proc_start_abstime", return_value=42), \
-                mock.patch.object(disk._libc, "proc_pidpath",
-                                  side_effect=fake_pidpath) as pidpath:
-            first = disk.proc_name(777)
-            second = disk.proc_name(777)      # same start -> served from cache
-        self.assertEqual((first, second), ("foo", "foo"))
-        self.assertEqual(pidpath.call_count, 1)
+    # proc_name and its cache moved to scopes/core.py (see test_core.py); the
+    # disk module re-exports it. This asserts the re-export stays wired up.
+    def test_disk_reexports_core_proc_name(self):
+        self.assertIs(disk.proc_name, disk.core.proc_name)
 
 
 if __name__ == "__main__":

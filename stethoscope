@@ -40,6 +40,17 @@ examples:
 """
 
 
+SCOPES = {
+    # scope name -> importable module, and its optional `tui` submodule.
+    # Adding a scope is a one-liner here plus a scopes/<name>.py data layer.
+    "disk": {"module": "scopes.disk", "tui": "scopes.disk_tui"},
+}
+
+
+def _load(dotted):
+    return __import__(dotted, fromlist=["main"])
+
+
 def main(argv):
     args = argv[1:]
     if not args or args[0] in ("-h", "--help", "help"):
@@ -47,17 +58,15 @@ def main(argv):
         return 0
 
     scope = args.pop(0)
+    spec = SCOPES.get(scope)
+    if spec is None:
+        sys.stderr.write("unknown scope: %s\n\n%s" % (scope, USAGE))
+        return 2
 
-    if scope == "disk":
-        if args and args[0] == "tui":
-            from scopes import disk_tui
-            return disk_tui.main()
-        from scopes import disk
-        # disk.main expects [prog, mode, ...]; rebrand prog for its messages
-        return disk.main(["stethoscope disk"] + args)
-
-    sys.stderr.write("unknown scope: %s\n\n%s" % (scope, USAGE))
-    return 2
+    if args and args[0] == "tui" and spec.get("tui"):
+        return _load(spec["tui"]).main()
+    # scope.main expects [prog, mode, ...]; rebrand prog for its messages
+    return _load(spec["module"]).main(["stethoscope %s" % scope] + args)
 
 
 if __name__ == "__main__":
