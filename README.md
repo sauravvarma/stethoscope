@@ -1,6 +1,6 @@
 # stethoscope
 
-**Vital signs for your Mac** — a machine's sense of its own internal state.
+**Vital signs for your Mac** — the sense of its own internal state.
 
 See exactly which process is hammering your disk, stalling on I/O, or refusing to let a drive eject — with more vitals (CPU, memory, battery, drive health) on the roadmap.
 
@@ -84,7 +84,7 @@ On top of the scopes: [agent primitives](https://github.com/sauravvarma/stethosc
 
 ### For AI agents
 
-stethoscope's probes are designed to become **primitives an agent can reason over**, not just screens a human watches. The intended loop: an agent notices a symptom ("battery draining fast", "disk constantly busy"), calls the relevant probes, gets structured vitals back (`--json`), correlates across scopes — *this process has a rising memory slope **and** a wakeup storm* — checks the machine's own recorded baseline, and proposes a diagnosis with the exact drill-down command to confirm it. The data layer already returns structures rather than text; [v0.5](https://github.com/sauravvarma/stethoscope/milestone/4) makes that contract public and stable, and [v1.0](https://github.com/sauravvarma/stethoscope/milestone/7) exposes it as MCP tools.
+stethoscope's probes are designed to become **primitives an agent can reason over**, not screens a human watches. The intended loop: an agent notices a symptom ("battery draining fast", "disk constantly busy"), calls the relevant probes, gets structured vitals back (`--json`), correlates across scopes — *this process has a rising memory slope **and** a wakeup storm* — checks the machine's own recorded baseline, and proposes a diagnosis with the exact drill-down command to confirm it. The data layer already returns structures rather than text; [v0.5](https://github.com/sauravvarma/stethoscope/milestone/4) makes that contract public and stable, and [v1.0](https://github.com/sauravvarma/stethoscope/milestone/7) exposes it as MCP tools.
 
 ## How it works
 
