@@ -38,6 +38,36 @@ _libc.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
 _libc.proc_pid_rusage.restype = ctypes.c_int
 _libc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
 _libc.proc_pidpath.restype = ctypes.c_int
+_libc.mach_absolute_time.argtypes = []
+_libc.mach_absolute_time.restype = ctypes.c_uint64
+_libc.mach_timebase_info.argtypes = [ctypes.c_void_p]
+_libc.mach_timebase_info.restype = ctypes.c_int
+
+
+class _MachTimebase(ctypes.Structure):
+    _fields_ = [("numer", ctypes.c_uint32), ("denom", ctypes.c_uint32)]
+
+
+def _read_timebase():
+    tb = _MachTimebase()
+    _libc.mach_timebase_info(ctypes.byref(tb))
+    # denom is never 0 on a real system, but guard so import can't divide-by-zero.
+    return (tb.numer or 1, tb.denom or 1)
+
+
+_TB_NUMER, _TB_DENOM = _read_timebase()
+
+
+def mach_absolute_time():
+    """The monotonic mach-absolute clock, same units as rusage CPU times.
+
+    CPU% is a timebase-free ratio: delta(CPU ticks) / delta(this clock)."""
+    return _libc.mach_absolute_time()
+
+
+def abstime_to_seconds(ticks):
+    """Convert a mach-absolute-time delta to wall seconds (Apple Silicon: 125/3)."""
+    return ticks * _TB_NUMER / _TB_DENOM / 1e9
 
 
 class RUsageInfo(ctypes.Structure):

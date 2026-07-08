@@ -100,6 +100,28 @@ mounted volume matches, `targets`/`holders` are empty and `error` is set (exit
 `inspect` streams a live `fs_usage` trace and is **human-only** (no `--json`);
 it requires root (exit `3` without it).
 
+## `cpu top` / `cpu wakeups`
+
+One document per sample (same `--once` / `--duration` behavior as `disk top`).
+`top` ranks `processes` by `cpu_pct`, `wakeups` ranks by `wakeups_per_s`.
+
+```json
+{
+  "schema": 1, "scope": "cpu", "command": "top",
+  "system": {"cpu_pct": 143.9, "ncpu": 8},
+  "processes": [
+    {"pid": 29641, "name": "copilot", "cpu_pct": 93.9,
+     "wakeups_per_s": 412.0, "idle_wakeups_per_s": 400.0,
+     "interrupt_wakeups_per_s": 12.0}
+  ]
+}
+```
+
+`cpu_pct` is machine-relative, not per-core: a process saturating two cores
+reads ~`200.0`, and `system.cpu_pct` sums all processes (approaches
+`ncpu × 100`). Exit: `0`.
+
 ## Changelog
 
-- **schema 1** — initial contract: `disk` `top`/`holds`/`busy`, exit codes.
+- **schema 1** — initial contract: `disk` `top`/`holds`/`busy`, `cpu`
+  `top`/`wakeups`, exit codes.

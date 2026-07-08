@@ -9,7 +9,8 @@ agents. Each subsystem is a "scope" — a namespace of commands backed by a
 reusable data layer in scopes/<name>.py.
 
   stethoscope disk <cmd>      per-process disk I/O, holds, eject blockers
-  (planned: cpu, memory, battery, smart — see the repo roadmap)
+  stethoscope cpu <cmd>       per-process CPU utilization and wakeups
+  (planned: memory, battery, smart — see the repo roadmap)
 
 No third-party dependencies — system Python 3 only.
 """
@@ -30,11 +31,17 @@ scopes:
             holds <pid>     what files a process holds open
             busy <volume>   which pids pin a disk ("why won't it eject")
             tui             full-screen interactive view (sudo -E)
+  cpu     per-process CPU utilization and wakeups
+            top             who is using the CPU now (default)
+            wakeups         who is waking the CPU most
 
-planned scopes: cpu, memory, battery, smart  (see roadmap)
+planned scopes: memory, battery, smart  (see roadmap)
+
+agent/scripting: --json --once --duration N on the sampling commands
 
 examples:
   sudo ./stethoscope disk top
+  sudo ./stethoscope cpu top
   sudo ./stethoscope disk busy "/Volumes/X9 Pro"
   sudo -E ./stethoscope disk tui
 """
@@ -44,6 +51,7 @@ SCOPES = {
     # scope name -> importable module, and its optional `tui` submodule.
     # Adding a scope is a one-liner here plus a scopes/<name>.py data layer.
     "disk": {"module": "scopes.disk", "tui": "scopes.disk_tui"},
+    "cpu": {"module": "scopes.cpu"},
 }
 
 
