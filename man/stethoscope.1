@@ -1,0 +1,185 @@
+.\" man page for stethoscope
+.TH STETHOSCOPE 1 "July 8, 2026" "stethoscope 0.1.0" "User Commands"
+.SH NAME
+stethoscope \- vital signs for your Mac
+.SH SYNOPSIS
+.B stethoscope
+.I scope
+.RI [ command ]
+.RI [ args ]
+.RI [ --json ]
+.RI [ --once ]
+.RI [ --duration
+.IR N ]
+.SH DESCRIPTION
+.B stethoscope
+is a machine\-health observability tool for macOS: structured probes over the
+OS's native introspection surfaces, presented for humans (CLI/TUI) and
+consumable by agents. Each subsystem is a
+.IR scope :
+a namespace of commands backed by a reusable data layer. Every number a human
+sees and every field an agent reads comes from the same function, so a probe
+can be rendered as a table or emitted as JSON without divergence.
+.PP
+Everything it touches ships with macOS
+.RB ( libproc ,
+.BR fs_usage ,
+.BR lsof ,
+.BR vm_stat ,
+.BR ioreg ,
+.BR pmset ,
+.BR diskutil ,
+system Python 3). There are no third\-party dependencies;
+.B smartctl
+is used opportunistically by the
+.B smart
+scope if it happens to be installed.
+.SH SCOPES
+.TP
+.B disk
+Per\-process disk I/O visibility.
+.RS
+.TP
+.B top
+Who is doing disk I/O now (default). Ranks processes by read/write per second.
+.TP
+.B inspect \fIpid\fR
+Why \(em a live \fBfs_usage\fR syscall trace for one pid (needs root).
+.TP
+.B holds \fIpid\fR
+What on\-disk files a process holds open.
+.TP
+.B busy \fIvolume\fR
+Which pids pin a volume/device open ("why won't it eject").
+.TP
+.B tui
+Full\-screen interactive view (run with \fBsudo -E\fR).
+.RE
+.TP
+.B cpu
+Per\-process CPU utilization and wakeups.
+.RS
+.TP
+.B top
+Rank processes by CPU% (default). Utilization is machine\-relative; a process
+saturating two cores reads ~200%.
+.TP
+.B wakeups
+Rank by idle+interrupt wakeups per second \(em battery\- and scheduler\-hostile
+processes even at low CPU%.
+.RE
+.TP
+.B memory
+Per\-process footprint and leak watching.
+.RS
+.TP
+.B top
+Rank by memory footprint (default); header shows system pressure.
+.TP
+.B watch \fIpid\fR
+Sample one process's footprint over time; report the slope (MB/min) and flag a
+leak candidate.
+.RE
+.TP
+.B battery
+Power drain and battery health.
+.RS
+.TP
+.B health
+Charge, cycle count, capacity vs design, condition (default).
+.TP
+.B top
+Rank processes by an energy\-impact score (CPU% + weighted wakeups).
+.TP
+.B drainers
+Cumulative energy impact since you last unplugged.
+.RE
+.TP
+.B smart
+.RI [ disk ]
+Drive health, wear, and life expectancy. SMART status plus \(em when
+\fBsmartctl\fR is installed \(em wear percentage, TBW, power\-on hours, spare
+capacity and pre\-failure warnings. Exits non\-zero if any drive is critical.
+.TP
+.B checkup
+A one\-shot full\-body exam: samples every scope once and prints a health
+verdict with findings and the drill\-down command to confirm each.
+.TP
+.B mcp
+Run a Model Context Protocol server over stdio, exposing the scopes as agent
+tools. Usually launched by an MCP client, not by hand.
+.SH AGENT / SCRIPTING FLAGS
+.TP
+.B --json
+Emit one structured JSON document per sample instead of the human table
+(newline\-delimited for streams). Shapes are documented in SCHEMA.md.
+.TP
+.B --once
+Take a single sample and exit (sampling commands).
+.TP
+.B --duration \fIN\fR
+Sample for \fIN\fR seconds, then exit.
+.TP
+.B --interval \fIN\fR
+Seconds between samples (default 1).
+.TP
+.B --limit \fIN\fR
+Rows to show (default 20).
+.SH EXIT CODES
+.TP
+.B 0
+Ran fine; nothing notable / clean.
+.TP
+.B 1
+Ran fine and the probe found the thing (\fBbusy\fR: holders exist; \fBmemory
+watch\fR: leak candidate; \fBsmart\fR/\fBcheckup\fR: critical).
+.TP
+.B 2
+Bad invocation.
+.TP
+.B 3
+Needs root / permission denied.
+.SH A NOTE ON SUDO
+The kernel shows a process's accounting only to root or its owner. Without
+sudo you see your own processes but not other users' or system daemons \(em and
+daemons are frequently the answer. Run the sampling and holder commands under
+sudo for full\-system coverage;
+.B inspect
+requires it. The TUI wants
+.B sudo -E
+so curses keeps
+.BR $TERM .
+.SH EXAMPLES
+.TP
+Who is hammering the disk, then why:
+.B sudo stethoscope disk top
+.br
+.B sudo stethoscope disk inspect 12345
+.TP
+Why won't this drive eject:
+.B sudo stethoscope disk busy "/Volumes/X9 Pro"
+.TP
+Is a process leaking memory:
+.B stethoscope memory watch 12345
+.TP
+What's draining the battery since I unplugged:
+.B stethoscope battery drainers
+.TP
+One\-shot machine health, for a script:
+.B stethoscope checkup --json
+.SH FILES
+.TP
+.I ~/Library/Application Support/stethoscope/battery_baseline.json
+Baseline snapshot used by \fBbattery drainers\fR.
+.SH SEE ALSO
+.BR fs_usage (1),
+.BR lsof (8),
+.BR vm_stat (1),
+.BR pmset (1),
+.BR ioreg (8),
+.BR diskutil (8),
+.BR smartctl (8)
+.PP
+The JSON output contract is documented in SCHEMA.md in the source tree.
+.SH LICENSE
+MIT.

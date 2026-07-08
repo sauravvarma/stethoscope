@@ -2,7 +2,7 @@
 
 **Vital signs for your Mac** — the sense of its own internal state.
 
-See exactly which process is hammering your disk, stalling on I/O, or refusing to let a drive eject — with more vitals (CPU, memory, battery, drive health) on the roadmap.
+See exactly which process is hammering your disk, pegging a core, leaking memory, draining your battery, or wearing out a drive — as a human-readable table, a live TUI, structured `--json`, or [MCP tools an agent can call](docs/agent-walkthrough.md).
 
 ![stethoscope disk tui](assets/tui.svg)
 
@@ -27,11 +27,16 @@ Requirements: macOS. Everything it touches — `libproc`, `fs_usage`, `lsof`, sy
 
 ```sh
 sudo ./stethoscope disk top                     # who is doing disk I/O right now
-sudo ./stethoscope disk inspect 12345           # why — live syscall trace of one pid
-./stethoscope disk holds 12345                  # what files a process holds open
 sudo ./stethoscope disk busy "/Volumes/X9 Pro"  # which pids won't let it eject
-sudo -E ./stethoscope disk tui                  # full-screen interactive view
+sudo ./stethoscope cpu top                       # who is pegging the cores
+./stethoscope memory watch 12345                 # is this process leaking?
+./stethoscope battery drainers                   # what's drained me since I unplugged
+./stethoscope smart                              # drive health, wear, life expectancy
+./stethoscope checkup                            # one-shot full-body exam
+./stethoscope cpu top --once --json              # structured output for scripts/agents
 ```
+
+Every scope command takes `--json`, `--once`/`--duration`, and returns a meaningful exit code — see [SCHEMA.md](SCHEMA.md) and the [agent walkthrough](docs/agent-walkthrough.md).
 
 ## The `disk` scope
 
@@ -71,20 +76,25 @@ Destructive actions (`x` kill, `e` eject) always ask for confirmation first.
 
 ## Scopes & roadmap
 
-Each subsystem is a **scope** — a command namespace backed by a reusable data layer. `disk` is the first organ stethoscope knows how to examine:
+Each subsystem is a **scope** — a command namespace backed by a reusable data layer:
 
 | Scope | Status | What it examines |
 |---|---|---|
 | `disk` | **shipped** | per-process disk I/O, blocked syscalls, open-file holds, eject blockers |
-| `cpu` + `memory` | [v0.2](https://github.com/sauravvarma/stethoscope/milestone/1) | who's pegging cores, wakeups, footprint, leak candidates |
-| `battery` | [v0.3](https://github.com/sauravvarma/stethoscope/milestone/2) | per-process energy impact — what's draining you |
-| `smart` | [v0.4](https://github.com/sauravvarma/stethoscope/milestone/3) | SMART data, drive wear, external-drive life expectancy |
+| `cpu` | **shipped** | per-process CPU%, idle/interrupt wakeups |
+| `memory` | **shipped** | per-process footprint, system pressure, leak-candidate slope |
+| `battery` | **shipped** | health (cycles, capacity, condition), energy impact, drainers since unplug |
+| `smart` | **shipped** | SMART status, wear %, TBW, life expectancy, pre-failure warnings |
 
-On top of the scopes: [agent primitives](https://github.com/sauravvarma/stethoscope/milestone/4) (`--json` everywhere, one-shot sampling, a documented schema), [recording & baselines](https://github.com/sauravvarma/stethoscope/milestone/5) (what does *normal* look like on this machine), [anomaly detection](https://github.com/sauravvarma/stethoscope/milestone/6) (flag what deviates — leaks, runaway processes, `triage`), and [the doctor](https://github.com/sauravvarma/stethoscope/milestone/7) (`checkup`, MCP server, Homebrew core).
+Across every scope: **agent primitives** are shipped — `--json` on every command, one-shot sampling (`--once`/`--duration`), meaningful exit codes, and a versioned [SCHEMA.md](SCHEMA.md); plus [`checkup`](#) (one-shot full-body exam) and an [MCP server](docs/agent-walkthrough.md#appendix-the-mcp-surface) exposing the scopes as agent tools.
+
+Still on the roadmap: [recording & baselines](https://github.com/sauravvarma/stethoscope/milestone/5) (what does *normal* look like on this machine), [anomaly detection](https://github.com/sauravvarma/stethoscope/milestone/6) (flag deviation — leaks, runaway processes, `triage`), TUI tabs for the new scopes, and [Homebrew distribution](https://github.com/sauravvarma/stethoscope/milestone/7).
 
 ### For AI agents
 
-stethoscope's probes are designed to become **primitives an agent can reason over**, not screens a human watches. The intended loop: an agent notices a symptom ("battery draining fast", "disk constantly busy"), calls the relevant probes, gets structured vitals back (`--json`), correlates across scopes — *this process has a rising memory slope **and** a wakeup storm* — checks the machine's own recorded baseline, and proposes a diagnosis with the exact drill-down command to confirm it. The data layer already returns structures rather than text; [v0.5](https://github.com/sauravvarma/stethoscope/milestone/4) makes that contract public and stable, and [v1.0](https://github.com/sauravvarma/stethoscope/milestone/7) exposes it as MCP tools.
+stethoscope's probes are **primitives an agent can reason over**, not screens a human watches. The loop: notice a symptom ("battery draining fast", "disk constantly busy"), call the relevant probes, get structured vitals back (`--json`), correlate across scopes — *this process has a wakeup storm **and** the top energy score* — and propose a diagnosis with the exact drill-down command to confirm it. The data layer returns structures rather than text; the contract is public and stable ([SCHEMA.md](SCHEMA.md)) and exposed as MCP tools (`stethoscope mcp`).
+
+**See the worked example: [docs/agent-walkthrough.md](docs/agent-walkthrough.md)** — a full symptom→probes→correlation→diagnosis loop with real commands and real JSON.
 
 ## How it works
 
@@ -123,13 +133,24 @@ They give the richest block-layer view (per-request latency, device queue) on pa
 ## Architecture
 
 ```
-stethoscope          the dispatcher — `stethoscope <scope> <command>`
+stethoscope          the dispatcher — `stethoscope <scope> <command>` (scope registry)
 scopes/
-  disk.py            disk scope: data layer + CLI commands (self-documenting header)
+  core.py            shared spine: libproc rusage sampling, pid/name, formatting
+  output.py          agent contract: --json, --once/--duration, exit codes
+  disk.py            disk scope: per-process I/O, holds, eject blockers
   disk_tui.py        disk scope: curses TUI over the same data layer
+  cpu.py             cpu scope: CPU% + wakeups
+  memory.py          memory scope: footprint top + leak watch
+  battery.py         battery scope: health, energy top, drainers
+  smart.py           smart scope: drive health, wear, life expectancy
+  checkup.py         full-body exam composing every scope
+  mcp_server.py      MCP server exposing the scopes as agent tools
+tests/               stdlib unittest suite (macOS CI in .github/workflows)
+SCHEMA.md            the --json output contract (versioned)
+man/stethoscope.1    manual page
 ```
 
-**The design rule:** each scope is one module exposing a **data layer** — pure functions returning structures — with thin **presentation** on top. The CLI and the TUI render the *same* functions; agent-facing output (`--json`) and anomaly detection will build on the data layer, never on rendered text. Fix a number in one place, every surface updates.
+**The design rule:** each scope is one module exposing a **data layer** — pure functions returning structures — with thin **presentation** on top. The CLI, the TUI, `--json`, `checkup` and the MCP server render the *same* functions, never rendered text. Fix a number in one place, every surface updates.
 
 The TUI re-implements nothing:
 
