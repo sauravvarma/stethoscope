@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1055" height="606" viewBox="0 0 1055 606" font-family="SF Mono, Menlo, Consolas, monospace">
+<rect x="0" y="0" width="1055" height="606" rx="10" fill="#12141a"/>
+<circle cx="20" cy="14" r="6" fill="#ff5f56"/>
+<circle cx="38" cy="14" r="6" fill="#ffbd2e"/>
+<circle cx="56" cy="14" r="6" fill="#27c93f"/>
+<rect x="18.0" y="37.0" width="1019.1" height="18.0" fill="#56b6c2"/>
+<text x="18.0" y="48.0" xml:space="preserve" fill="#1c1f26" font-size="15" font-weight="bold" textLength="1019.1" lengthAdjust="spacingAndGlyphs"> stethoscope[1]Processes   2 Volumes                                                          user  20:59:11 </text>
+<text x="18.0" y="66.0" xml:space="preserve" fill="#d6d9e0" font-size="15" textLength="9.3" lengthAdjust="spacingAndGlyphs"> </text>
+<text x="27.4" y="66.0" xml:space="preserve" fill="#56b6c2" font-size="15" textLength="467.5" lengthAdjust="spacingAndGlyphs">system read 657.5K/s  write 379.6K/s   ·   refresh</text>
+<text x="494.9" y="66.0" xml:space="preserve" fill="#d6d9e0" font-size="15" fill-opacity="0.6" textLength="532.9" lengthAdjust="spacingAndGlyphs">not root — some I/O &amp; holders hidden (sudo for full view)</text>
+<text x="18.0" y="102.0" xml:space="preserve" fill="#d6d9e0" font-size="15" textLength="9.3" lengthAdjust="spacingAndGlyphs"> </text>
+<text x="27.4" y="102.0" xml:space="preserve" fill="#d6d9e0" font-size="15" font-weight="bold" textLength="757.4" lengthAdjust="spacingAndGlyphs">    PID  COMMAND                         READ/s     WRITE/s     RD TOT     WR TOT</text>
+<rect x="18.0" y="109.0" width="9.3" height="18.0" fill="#61afef"/>
+<text x="18.0" y="120.0" xml:space="preserve" fill="#d6d9e0" font-size="15" textLength="9.3" lengthAdjust="spacingAndGlyphs"> </text>
+<rect x="27.4" y="109.0" width="757.4" height="18.0" fill="#61afef"/>
+<text x="27.4" y="120.0" xml:space="preserve" fill="#d6d9e0" font-size="15" font-weight="bold" textLength="757.4" lengthAdjust="spacingAndGlyphs">  37205  Arc                           634.0K/s        0B/s       2.4G      67.2G</text>
+<rect x="784.7" y="109.0" width="252.4" height="18.0" fill="#61afef"/>
+<text x="784.7" y="120.0" xml:space="preserve" fill="#d6d9e0" font-size="15" textLength="252.4" lengthAdjust="spacingAndGlyphs">                           </text>
+<text x="18.0" y="138.0" xml:space="preserve" fill="#d6d9e0" font-size="15" textLength="766.7" lengthAdjust="spacingAndGlyphs">   93467  node                              0B/s    375.7K/s       2.8M       9.8G</text>
+<text x="18.0" y="156.0" xml:space="preserve" fill="#d6d9e0" font-size="15" textLength="766.7" lengthAdjust="spacingAndGlyphs">     814  imagent                        23.5K/s        0B/s       2.8G      14.4G</text>
+<text x="18.0" y="174.0" xml:space="preserve" fill="#d6d9e0" font-size="15" textLength="766.7" lengthAdjust="spacingAndGlyphs">   77031  spotlightknowledged.update        0B/s      3.9K/s     365.9M     212.2M</text>
+<rect x="18.0" y="559.0" width="1019.1" height="18.0" fill="#56b6c2"/>
+<text x="18.0" y="570.0" xml:space="preserve" fill="#1c1f26" font-size="15" textLength="1019.1" lengthAdjust="spacingAndGlyphs"> ↑↓/jk move  Enter/f files  i inspect  x kill  1/2 view  p pause  +/- rate  q quit                           </text>
+</svg>

@@ -1,22 +1,27 @@
 # stethoscope
 
-**Interoception for your Mac** — a machine-health observability layer built on macOS's native introspection surfaces.
+**Vital signs for your Mac.** See exactly which process is hammering your disk, stalling on I/O, or refusing to let a drive eject — with more vitals (CPU, memory, battery, drive health) on the roadmap.
 
-Interoception is the sense of your own internal body state. stethoscope gives that sense to a machine (and to the human or AI agent examining it): structured probes over CPU, memory, disk, I/O, battery, and drive health, presented for humans as a CLI/TUI and designed to be consumable as primitives by an agent reasoning about system health.
+![stethoscope disk tui](assets/tui.svg)
 
-Each subsystem is a **scope** — a command namespace backed by a reusable data layer:
+## Install
 
-| Scope | Status | What it examines |
-|---|---|---|
-| `disk` | **shipped** | per-process disk I/O, blocked syscalls, open-file holds, eject blockers |
-| `cpu` | planned | who's pegging cores, wakeups, scheduling pressure |
-| `memory` | planned | footprint, memory pressure, leak candidates over time |
-| `battery` | planned | energy impact per process — what's draining you |
-| `smart` | planned | drive health, SMART data, external-drive life expectancy |
+Homebrew (recommended):
 
-On top of the scopes, the roadmap adds **recording** (sample vitals over time), **anomaly detection** (flag what deviates from the machine's own baseline), and **`--json` everywhere** so an agent can call any probe and reason over the result.
+```sh
+brew install sauravvarma/tap/stethoscope
+```
 
-No third-party dependencies — system Python 3 + `ctypes`.
+Or clone and run — there's nothing to build:
+
+```sh
+git clone https://github.com/sauravvarma/stethoscope.git
+cd stethoscope && ./stethoscope disk top
+```
+
+Requirements: macOS. Everything it touches — `libproc`, `fs_usage`, `lsof`, system Python 3 — ships with the OS. No third-party dependencies.
+
+## Quick start
 
 ```sh
 sudo ./stethoscope disk top                     # who is doing disk I/O right now
@@ -26,54 +31,73 @@ sudo ./stethoscope disk busy "/Volumes/X9 Pro"  # which pids won't let it eject
 sudo -E ./stethoscope disk tui                  # full-screen interactive view
 ```
 
----
-
 ## The `disk` scope
 
-Answers four questions, broad → narrow:
+Four questions, broad → narrow:
 
-| Command | Question | Needs sudo? |
+| Command | Question | sudo? |
 |---|---|---|
-| `disk top` | **Who** is doing disk I/O right now? | recommended (else only your own processes) |
-| `disk inspect <pid>` | **Why** — what paths, reads vs writes, is it blocking? | yes |
+| `disk top` | **Who** is doing disk I/O right now? | recommended¹ |
+| `disk inspect <pid>` | **Why** — what paths, reads vs writes, is it blocking? | required |
 | `disk holds <pid>` | **What** files is a process holding open? | for other users' processes |
-| `disk busy <volume>` | **Which** pids are pinning a disk? (reverse lookup) | recommended (else system daemons hidden) |
+| `disk busy <volume>` | **Which** pids are pinning a disk? ("why won't it eject") | recommended¹ |
 
-### Interactive TUI
+`disk busy` accepts a mount path (`/Volumes/X9 Pro`), a volume name (`X9 Pro`), a device node (`disk6s2`), or a whole disk (`disk6` → all its slices), and tells you *why* each holder is pinning the volume — plus the `diskutil` escape hatch to force-eject.
 
-`disk tui` is a curses front-end over the same building blocks — it re-implements *nothing* about disk I/O, it just presents the disk scope's functions:
+### A note on sudo
 
-```sh
-sudo -E ./stethoscope disk tui     # -E preserves $TERM so curses can start
-```
+One rule explains every ¹ above: **the kernel only shows a process's accounting to root or its owner.** Without sudo you see your own processes but not other users' or system daemons — and the daemons are frequently the answer (`mds`/Spotlight and `fseventsd` love holding external volumes). `inspect` is stricter: `fs_usage` refuses to trace at all without root. The TUI additionally wants `sudo -E` because plain `sudo` strips `$TERM`, which curses needs (the tool falls back to `xterm-256color` if it's missing).
 
-> `sudo` strips `$TERM` by default, which makes curses fail with
-> `setupterm: could not find terminal`. Use `sudo -E`, or just run it — the tool
-> falls back to `TERM=xterm-256color` when `$TERM` is missing.
+### The TUI
 
-| Panel | Backed by | |
+`disk tui` is a full-screen view over the same data layer — two tabs (Processes, Volumes), popups for drill-down, and actions:
+
+| Keys | Where | Action |
 |---|---|---|
-| **Processes** | `snapshot_diskio` + `rank_io` | live ranked per-process I/O (the `top` view, navigable) |
-| **Volumes** → holders | `_mount_table` + `resolve_volume` + `collect_holders` | reverse lookup (the `busy` view) in a popup |
-| held-files popup | `open_files` | a process's on-disk holds |
-| inspect | `cmd_inspect` | suspends the TUI and streams `fs_usage` |
+| `↑`/`↓` or `j`/`k` | everywhere | move selection |
+| `1` / `2` / `Tab` | everywhere | switch tab |
+| `p` / `space` | everywhere | pause sampling |
+| `+` / `-` | everywhere | refresh rate |
+| `Enter` / `f` | Processes | held-files popup |
+| `i` | Processes | inspect — live `fs_usage` trace |
+| `x` | Processes | kill process |
+| `Enter` / `r` | Volumes | who's holding this volume |
+| `e` | Volumes | eject |
+| `q` | everywhere | quit |
 
-Keys: `↑↓`/`jk` move · `1`/`2`/`Tab` switch view · `p`/space pause · `+`/`-` refresh rate · `q` quit. In **Processes**: `Enter`/`f` held files, `i` inspect, `x` kill (confirm). In **Volumes**: `Enter`/`r` holders, `e` eject (confirm). It runs at 200 ms input polling so keys stay snappy while I/O samples at the refresh interval.
+Destructive actions (`x` kill, `e` eject) always ask for confirmation first.
 
-The CLI and the TUI share one data layer (`scopes/disk.py`): `snapshot_diskio`, `rank_io`, `collect_holders`, `open_files`, `resolve_volume`, `proc_name`, `human`/`rate`. Fix a number in one place, both surfaces update.
+## Scopes & roadmap
 
-### How macOS exposes disk I/O, and why this scope is built the way it is
+Each subsystem is a **scope** — a command namespace backed by a reusable data layer. `disk` is the first organ stethoscope knows how to examine:
+
+| Scope | Status | What it examines |
+|---|---|---|
+| `disk` | **shipped** | per-process disk I/O, blocked syscalls, open-file holds, eject blockers |
+| `cpu` + `memory` | [v0.2](https://github.com/sauravvarma/stethoscope/milestone/1) | who's pegging cores, wakeups, footprint, leak candidates |
+| `battery` | [v0.3](https://github.com/sauravvarma/stethoscope/milestone/2) | per-process energy impact — what's draining you |
+| `smart` | [v0.4](https://github.com/sauravvarma/stethoscope/milestone/3) | SMART data, drive wear, external-drive life expectancy |
+
+On top of the scopes: [agent primitives](https://github.com/sauravvarma/stethoscope/milestone/4) (`--json` everywhere, one-shot sampling, a documented schema), [recording & baselines](https://github.com/sauravvarma/stethoscope/milestone/5) (what does *normal* look like on this machine), [anomaly detection](https://github.com/sauravvarma/stethoscope/milestone/6) (flag what deviates — leaks, runaway processes, `triage`), and [the doctor](https://github.com/sauravvarma/stethoscope/milestone/7) (`checkup`, MCP server, Homebrew core).
+
+### For AI agents
+
+stethoscope's probes are designed to become **primitives an agent can reason over**, not just screens a human watches. The intended loop: an agent notices a symptom ("battery draining fast", "disk constantly busy"), calls the relevant probes, gets structured vitals back (`--json`), correlates across scopes — *this process has a rising memory slope **and** a wakeup storm* — checks the machine's own recorded baseline, and proposes a diagnosis with the exact drill-down command to confirm it. The data layer already returns structures rather than text; [v0.5](https://github.com/sauravvarma/stethoscope/milestone/4) makes that contract public and stable, and [v1.0](https://github.com/sauravvarma/stethoscope/milestone/7) exposes it as MCP tools.
+
+## How it works
+
+*Background — skippable if you just want to use the tool. This explains how macOS exposes disk I/O and why the disk scope is built the way it is.*
 
 A process doesn't touch the disk directly. It issues a **syscall** (`read`/`write`/`pread`/`fsync`…), which enters the **VFS** layer, usually hits the **unified buffer cache** (so most "reads" and "writes" never reach the device), and only on a cache miss or flush does the kernel enqueue a **block I/O request** to the storage driver, which the device completes asynchronously. Attributing physical disk activity back to a process means catching it at one of these layers. macOS gives three practical vantage points:
 
-**1. `proc_pid_rusage()` — the spine of this scope (`top`).**
-The kernel keeps a running tally per process: `ri_diskio_bytesread` and `ri_diskio_byteswritten` — cumulative bytes that were *charged to that process* as real device I/O. This is the exact number Activity Monitor's "Bytes Read/Written" column shows. We poll it across every pid (via `proc_listpids`) and diff between samples to get bytes/sec. It needs no tracing framework, survives **SIP**, and is cheap. Reading *other* users' processes requires root, hence `sudo`.
+**1. `proc_pid_rusage()` — the spine of `top`.**
+The kernel keeps a running tally per process: `ri_diskio_bytesread` and `ri_diskio_byteswritten` — cumulative bytes that were *charged to that process* as real device I/O. This is the exact number Activity Monitor's "Bytes Read/Written" column shows. We poll it across every pid (via `proc_listpids`) and diff between samples to get bytes/sec. It needs no tracing framework, survives **SIP**, and is cheap.
 
-**2. `fs_usage` — the "why" (`inspect`).**
-Apple's supported syscall tracer. For one pid it streams every filesystem operation with the **path**, **byte count**, **elapsed time**, and — critically — a **`W`** marker when the call *blocked* (the thread was scheduled off-CPU waiting on I/O). That `W` is your "process is holding / stalled on I/O" signal. Needs root.
+**2. `fs_usage` — the "why" behind `inspect`.**
+Apple's supported syscall tracer. For one pid it streams every filesystem operation with the **path**, **byte count**, **elapsed time**, and — critically — a **`W`** marker when the call *blocked* (the thread was scheduled off-CPU waiting on I/O). That `W` is your "process is stalled on I/O" signal.
 
-**3. `lsof` — the "what's held" (`holds`) and the reverse lookup (`busy`).**
-Every file a process has open is an entry in its file-descriptor table. `lsof` enumerates them; `disk holds` highlights the regular files and directories — the actual on-disk objects the process is keeping open.
+**3. `lsof` — the "what's held" behind `holds` and `busy`.**
+Every file a process has open is an entry in its file-descriptor table. `lsof` enumerates them; `disk holds` keeps the regular files and directories — the actual on-disk objects the process is keeping open.
 
 The reverse direction — *given a volume, which pids are pinning it* — is the "why won't this eject" problem. Passing a **mount point** to `lsof` makes it list every open file on that filesystem, and the FD column tells you the *reason* for each hold:
 
@@ -84,18 +108,17 @@ The reverse direction — *given a volume, which pids are pinning it* — is the
 | `3r` `4w` `5u` | an open file descriptor (read / write / read-write) |
 | `rtd` | the volume is a process's root directory |
 
-`disk busy` resolves a mount path (`/Volumes/X9 Pro`), volume name (`X9 Pro`), device (`/dev/disk6s2`), or whole disk (`disk6` → all its slices), groups holders by pid with a reason summary and example paths, and prints the `diskutil unmount force` / `unmountDisk` escape hatch. `fuser -c <mount>` gives the same pids as a bare list; `busy` is the annotated version. Run under sudo or system daemons like `mds` (Spotlight) and `fseventsd` that frequently hold external volumes stay invisible.
+`fuser -c <mount>` gives the same pids as a bare list; `busy` is the annotated version. Run it under sudo — otherwise system daemons like `mds` (Spotlight) and `fseventsd`, which frequently hold external volumes, stay invisible.
 
-#### Why not DTrace / `iosnoop` / `iotop`?
+### Why not DTrace / `iosnoop` / `iotop`?
+
 They give the richest block-layer view (per-request latency, device queue) on paper, but with **SIP enabled** (the default on modern macOS) DTrace's `io` provider is unreliable and often blocked. It's not a dependable spine, so this tool doesn't build on it. If you disable SIP you can add block-level tracing on top of the same questions.
 
-#### Honest limitation: buffered-write attribution
+## Limitations
 
-`ri_diskio_byteswritten` charges a process for I/O it is **accountable** for. Because of the unified buffer cache, application `write()`s are buffered and the *physical* flush to the SSD is frequently performed later by kernel flush threads — so a burst of `dd`/app writes may show up delayed, spread out, or attributed to a system process rather than the originating one. This is a property of macOS's I/O accounting (Activity Monitor behaves identically), not a bug in the tool. **Cache-missing reads** and **sustained real workloads** (databases, indexing, backups, builds) attribute cleanly, which is the common case you actually want to catch. For exact byte-for-byte causation on a specific process, use `inspect` (`fs_usage`), which traces the syscalls themselves.
+**Buffered-write attribution.** `ri_diskio_byteswritten` charges a process for I/O it is *accountable* for. Because of the unified buffer cache, application `write()`s are buffered and the *physical* flush to the SSD is frequently performed later by kernel flush threads — so a burst of `dd`/app writes may show up delayed, spread out, or attributed to a system process rather than the originating one. This is a property of macOS's I/O accounting (Activity Monitor behaves identically), not a bug in the tool. **Cache-missing reads** and **sustained real workloads** (databases, indexing, backups, builds) attribute cleanly, which is the common case you actually want to catch. For exact byte-for-byte causation on a specific process, use `inspect` (`fs_usage`), which traces the syscalls themselves.
 
----
-
-## Layout
+## Architecture
 
 ```
 stethoscope          the dispatcher — `stethoscope <scope> <command>`
@@ -104,4 +127,17 @@ scopes/
   disk_tui.py        disk scope: curses TUI over the same data layer
 ```
 
-Design rule: each scope is one module exposing a **data layer** (pure functions returning structures) with thin **presentation** on top. Future agent-facing output (`--json`) and anomaly detection build on the data layer, never on the rendered text.
+**The design rule:** each scope is one module exposing a **data layer** — pure functions returning structures — with thin **presentation** on top. The CLI and the TUI render the *same* functions; agent-facing output (`--json`) and anomaly detection will build on the data layer, never on rendered text. Fix a number in one place, every surface updates.
+
+The TUI re-implements nothing:
+
+| TUI surface | Backed by |
+|---|---|
+| Processes tab | `snapshot_diskio` + `rank_io` |
+| Volumes tab → holders popup | `_mount_table` + `resolve_volume` + `collect_holders` |
+| held-files popup | `open_files` |
+| inspect drill-down | `cmd_inspect` (suspends curses, streams `fs_usage`) |
+
+## License
+
+[MIT](LICENSE).
