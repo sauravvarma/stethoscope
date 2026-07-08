@@ -32,6 +32,18 @@ class TestDeviation(unittest.TestCase):
         self.assertEqual(anomaly.detect_deviation(
             current, baseline, now_ts=time.mktime((2026, 1, 1, 9, 0, 0, 0, 1, -1))), [])
 
+    def test_degenerate_band_is_ignored(self):
+        # cold start: p50 ~= p90 ~= p99 (few near-identical samples). A value a
+        # hair above p99 must NOT be flagged (regression: it read "critical").
+        baseline = {"baselines": [
+            {"hour": 9, "scope": "memory", "metric": "used",
+             "count": 4, "p50": 6151700000.0, "p90": 6151730000.0,
+             "p99": 6151730000.0}
+        ]}
+        current = [{"scope": "memory", "metric": "used", "value": 6152683520.0}]
+        self.assertEqual(anomaly.detect_deviation(
+            current, baseline, now_ts=time.mktime((2026, 1, 1, 9, 0, 0, 0, 1, -1))), [])
+
 
 class TestLeaks(unittest.TestCase):
     def test_rising_series_ranks_above_flat(self):

@@ -30,6 +30,11 @@ DEFAULT_DURATION = 3.0
 DEFAULT_INTERVAL = 1.0
 _SEV_ORDER = {"ok": 0, "info": 1, "warn": 2, "critical": 3}
 _PRESSURE_VALUE = {"normal": 1.0, "warn": 2.0, "critical": 4.0, "unknown": 0.0}
+# A baseline band whose p50..p99 spread is below this fraction of its center has
+# not yet captured real variance (the cold-start case: a few near-identical
+# samples). Judging deviation against such a razor-thin band flags noise as
+# "critical", so we skip it until the history is richer.
+MIN_BAND_SPREAD_FRAC = 0.05
 
 
 class AnomalyOpts:
@@ -225,6 +230,13 @@ def detect_deviation(current_metrics, baseline_result, now_ts=None, min_count=3)
         p90 = b.get("p90")
         p99 = b.get("p99")
         if p90 is None or p99 is None or value <= p90:
+            continue
+        # Skip cold-start / degenerate bands: if the historical p50..p99 spread
+        # is negligible relative to the band's center, the baseline hasn't seen
+        # real variation yet, so being a hair above p99 is noise, not an anomaly.
+        p50 = b.get("p50")
+        center = max(abs(p50 or 0.0), abs(p90), 1.0)
+        if (p99 - p50) < MIN_BAND_SPREAD_FRAC * center:
             continue
         sev = "critical" if value > p99 else "warn"
         threshold = p99 if sev == "critical" else p90
