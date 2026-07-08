@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-stethoscope — interoception for your Mac.
+stethoscope — vital signs for your Mac.
 
 A machine-health observability layer: structured probes over macOS's native
 introspection surfaces, presented for humans (CLI/TUI) and consumable by
@@ -18,7 +18,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
-USAGE = """stethoscope — interoception for your Mac
+USAGE = """stethoscope — vital signs for your Mac
 
 usage: stethoscope <scope> [command] [args]
 
