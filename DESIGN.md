@@ -8,19 +8,21 @@ alarmist unless something is actually alarming.*
 
 What exists today, as-built:
 
-- **Color pairs** (`curses` pairs 1–5, default terminal background):
+- **Color pairs** (`curses` pairs 1–6, default terminal background):
   - `C_ACCENT` — cyan. Used for the status sub-bar (system read/write, refresh
     rate, live/paused state).
-  - `C_READ` — green, `C_WRITE` — yellow. **Defined but currently unused** —
-    no code path applies them to the read/write columns. Worth noting as the
-    single biggest color gap: the read-vs-write semantic exists in the
-    palette but not on screen yet.
+  - `C_READ` — green, `C_WRITE` — yellow. Wired onto disk read/write
+    columns, respectively, so flow direction is visible without changing the
+    table shape.
   - `C_BAR` — black-on-cyan. Title bar and footer.
   - `C_SEL` — white-on-blue. Selected row.
+  - `C_CRIT` — red. Critical state tier for SMART failing/wear, battery
+    service, and memory pressure critical.
 - **Layout grammar**: title bar (row 0) → status sub-bar (row 1) → blank →
   column header (row 3, bold) → table body → footer (last row, keys legend).
-  Two tabs (`Processes` / `Volumes`) live inside the title bar itself, not a
-  separate tab row.
+  Cross-scope tabs live inside the title bar itself, not a separate tab row:
+  `[1]disk [2]cpu [3]memory [4]battery [5]smart`. Disk keeps its
+  Processes/Volumes subview inside the disk tab.
 - **Popups**: `curses.newwin` box-drawn overlay, centered, bold title inline
   in the top border, dimmed hint line at the bottom (`any key to close`).
   Used for read-only detail (held files, volume holders).
@@ -51,16 +53,14 @@ more about what hasn't been decided yet as more scopes arrive.
 | `selection` | blue bg / white fg | Cursor focus. Reserved exclusively for "this row is selected," never reused for status. |
 | `healthy` | green | State, not flow — e.g. SMART "good", battery cycle count nominal. |
 | `warning` | yellow | Degraded but not urgent — e.g. blocked syscall, battery below 20%. |
-| `critical` | red (new) | Needs attention now — e.g. disk near-full, SMART pre-fail, thermal throttle. Currently **no scope uses red**; reserve it exclusively for this tier so it stays meaningful. |
+| `critical` | red (`C_CRIT`) | Needs attention now — SMART failing / pre-fail / high wear, battery `Service Recommended`, memory pressure `critical`. Reserve red exclusively for this tier so it stays meaningful. |
 | `dim` (not a color, a weight) | terminal default + `A_DIM` | Secondary information: hints, disabled-state notices, popup footers. |
 
-Key proposal: **green/yellow's meaning should shift with context but never
-overload two meanings on one screen.** `disk`'s table uses green/yellow for
-read/write (a flow). A future `battery` scope's health line would use the
-same green/yellow/red for state tiers, but the two never appear in the same
-view, so the color stays unambiguous. If that turns out to be false (a
-combined dashboard view mixes both), we need a fourth pair of hues for state
-so flow and health are visually distinct — flagged below as an open question.
+Decision: **green/yellow shift by scope, but not within one row.** `disk` uses
+green/yellow only for read/write flow columns; memory, battery, and SMART use
+green/yellow/red for state tiers in their status/verdict cells. The shell has
+no mixed overview screen, so the roles remain legible. If an overview is added,
+it must include non-color labels such as READ/WRITE and OK/WARN/CRITICAL.
 
 ### Typography-in-terminal rules
 
@@ -86,8 +86,9 @@ so flow and health are visually distinct — flagged below as an open question.
 ```
 
 - **Tab bar stays inside row 0**, not a dedicated row — screen real estate on
-  a terminal is precious, and `disk`'s pattern of folding tabs into the title
-  bar should generalize: `[1]disk [2]cpu [3]memory [4]battery [5]smart`.
+  a terminal is precious. The settled grammar is
+  `[1]disk [2]cpu [3]memory [4]battery [5]smart`; number keys switch
+  scopes, and `Tab` switches disk's Processes/Volumes subview.
 - **Status sub-bar (row 1)** is the scope's "vitals at a glance" line — one
   line, always visible, no scrolling. Every scope should have exactly one.
 - **Popups** stay the single mechanism for "more detail on the current
@@ -114,28 +115,20 @@ so flow and health are visually distinct — flagged below as an open question.
   `kill`/`eject` today) plus bolding the target name in `critical` color —
   not a second keypress, just a stronger visual cue before the same y/N.
 
-## 3. Open questions
+## 3. Decisions from PR-05
 
-1. **Flow vs. state color collision.** If a future combined/overview screen
-   shows read/write flow *and* health tiers side by side, green/yellow will
-   mean two different things at once. Do we need a second hue pair for
-   state (e.g. blue-green/orange) or a non-color cue (icons like `●`/`▲`)?
-2. **Should `C_READ`/`C_WRITE` actually get wired up** in the disk table
-   (currently defined, unused), or was leaving read/write monochrome a
-   deliberate low-noise choice worth keeping as-is?
-3. **Red's debut.** No scope uses red yet. Which is the first real
-   "critical" signal — a SMART pre-fail flag, a >90% full disk, a
-   battery health "Service Recommended"? Worth prototyping red on one
-   real case before it becomes a system-wide convention.
-4. **Cross-scope tab bar** — once `cpu`/`memory`/`battery`/`smart` exist,
-   does `disk tui` become `stethoscope tui` with all scopes as tabs, or do
-   scopes stay independently launched? Changes whether row 0 needs to hold
-   5 tab labels instead of 2.
-5. **Sparklines / trend cues.** Everything today is instantaneous or
-   cumulative. Does a "vitals" tool need a tiny inline trend (e.g. last 10
-   samples as a sparkline) for read/write or battery drain, and if so where
-   does it fit without breaking the one-line status bar?
-6. **Non-color accessibility fallback.** `curses.has_colors()` is already
-   checked, but is monochrome-mode information-complete (e.g. can a
-   colorblind or `TERM=dumb` user still tell read from write, healthy from
-   critical) without color as the only signal?
+1. **Flow vs. state color collision.** There is no combined overview screen in
+   PR-05. Flow colors appear only in disk read/write columns; state colors appear
+   in scope status/verdict cells. Non-color text labels remain present.
+2. **`C_READ`/`C_WRITE` are wired.** Disk read-rate cells are green and
+   write-rate cells are yellow, with selection color taking precedence.
+3. **Red debuts as `C_CRIT`.** Critical memory pressure, battery `Service
+   Recommended`, and SMART critical/failing drives use red.
+4. **The TUI is cross-scope.** `stethoscope tui` is the primary shell with five
+   title-bar tabs. `stethoscope disk tui` remains as a compatibility route into
+   the same shell, focused on disk.
+5. **Sparklines stay out of PR-05.** Tables remain instantaneous; trend cues can
+   be introduced later without spending status-bar width now.
+6. **Monochrome remains information-complete.** Every colored state also has
+   text (`READ/s`, `WRITE/s`, `WARN`, `CRITICAL`, pressure names), so color is
+   enhancement, not the only signal.

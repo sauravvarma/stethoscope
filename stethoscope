@@ -14,6 +14,7 @@ reusable data layer in scopes/<name>.py.
   stethoscope battery <cmd>   power drain and battery health
   stethoscope smart [disk]    drive health, wear, and life expectancy
   stethoscope checkup         one-shot full-body exam across every scope
+  stethoscope tui             full-screen multi-scope interactive view
   stethoscope mcp             expose the scopes as MCP tools (agent integration)
 
 No third-party dependencies — system Python 3 only.
@@ -48,6 +49,7 @@ scopes:
   smart   drive health, wear, and life expectancy
             [disk]          SMART status + wear + pre-failure warnings
   checkup one-shot full-body exam — samples every scope, prints a verdict
+  tui     full-screen TUI with disk/cpu/memory/battery/smart tabs
   mcp     Model Context Protocol server — the scopes as agent tools (stdio)
 
 agent/scripting: --json --once --duration N on the sampling commands
@@ -56,6 +58,7 @@ examples:
   sudo ./stethoscope disk top
   sudo ./stethoscope cpu top
   sudo ./stethoscope disk busy "/Volumes/X9 Pro"
+  sudo -E ./stethoscope tui
   sudo -E ./stethoscope disk tui
 """
 
@@ -69,6 +72,7 @@ SCOPES = {
     "battery": {"module": "scopes.battery"},
     "smart": {"module": "scopes.smart"},
     "checkup": {"module": "scopes.checkup"},
+    "tui": {"module": "scopes.tui"},
     "mcp": {"module": "scopes.mcp_server"},
 }
 
@@ -89,6 +93,8 @@ def main(argv):
         sys.stderr.write("unknown scope: %s\n\n%s" % (scope, USAGE))
         return 2
 
+    if scope == "tui":
+        return _load(spec["module"]).main()
     if args and args[0] == "tui" and spec.get("tui"):
         return _load(spec["tui"]).main()
     # scope.main expects [prog, mode, ...]; rebrand prog for its messages
