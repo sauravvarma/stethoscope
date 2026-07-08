@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""
+stethoscope — interoception for your Mac.
+
+A machine-health observability layer: structured probes over macOS's native
+introspection surfaces, presented for humans (CLI/TUI) and consumable by
+agents. Each subsystem is a "scope" — a namespace of commands backed by a
+reusable data layer in scopes/<name>.py.
+
+  stethoscope disk <cmd>      per-process disk I/O, holds, eject blockers
+  (planned: cpu, memory, battery, smart — see the repo roadmap)
+
+No third-party dependencies — system Python 3 only.
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+
+USAGE = """stethoscope — interoception for your Mac
+
+usage: stethoscope <scope> [command] [args]
+
+scopes:
+  disk    per-process disk I/O visibility
+            top             who is doing disk I/O now (default)
+            inspect <pid>   why — live syscall trace (sudo)
+            holds <pid>     what files a process holds open
+            busy <volume>   which pids pin a disk ("why won't it eject")
+            tui             full-screen interactive view (sudo -E)
+
+planned scopes: cpu, memory, battery, smart  (see roadmap)
+
+examples:
+  sudo ./stethoscope disk top
+  sudo ./stethoscope disk busy "/Volumes/X9 Pro"
+  sudo -E ./stethoscope disk tui
+"""
+
+
+def main(argv):
+    args = argv[1:]
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(USAGE)
+        return 0
+
+    scope = args.pop(0)
+
+    if scope == "disk":
+        if args and args[0] == "tui":
+            from scopes import disk_tui
+            return disk_tui.main()
+        from scopes import disk
+        # disk.main expects [prog, mode, ...]; rebrand prog for its messages
+        return disk.main(["stethoscope disk"] + args)
+
+    sys.stderr.write("unknown scope: %s\n\n%s" % (scope, USAGE))
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
