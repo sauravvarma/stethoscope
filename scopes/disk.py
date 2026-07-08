@@ -47,6 +47,17 @@ PROC_ALL_PIDS = 1
 RUSAGE_INFO_V2 = 2
 PROC_PIDPATHINFO_MAXSIZE = 4 * 1024
 
+# Declare the ABI of every libproc symbol we bind. Without argtypes ctypes
+# assumes C ints and silently truncates any 64-bit pointer passed as a Python
+# int to 32 bits — a latent footgun as new scopes reuse these bindings.
+_libc.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32,
+                                ctypes.c_void_p, ctypes.c_int]
+_libc.proc_listpids.restype = ctypes.c_int
+_libc.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+_libc.proc_pid_rusage.restype = ctypes.c_int
+_libc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+_libc.proc_pidpath.restype = ctypes.c_int
+
 
 class RUsageInfoV2(ctypes.Structure):
     """Prefix of rusage_info_v2 up to the two fields we need."""
@@ -100,20 +111,38 @@ def proc_diskio(pid):
     return (info.ri_diskio_bytesread, info.ri_diskio_byteswritten)
 
 
-_name_cache = {}
+_name_cache = {}   # pid -> (start_abstime, name)
+
+
+def _proc_start_abstime(pid):
+    """Mach-absolute start time of pid, or 0 if inaccessible.
+
+    Used to detect PID reuse: the (pid, start_abstime) pair uniquely identifies
+    a process, so a cached name is only trusted while the start time matches.
+    """
+    info = RUsageInfoV2()
+    rc = _libc.proc_pid_rusage(pid, RUSAGE_INFO_V2, ctypes.byref(info))
+    return info.ri_proc_start_abstime if rc == 0 else 0
 
 
 def proc_name(pid):
-    """Best-effort short command name for pid (cached)."""
-    if pid in _name_cache:
-        return _name_cache[pid]
+    """Best-effort short command name for pid.
+
+    Cached, but keyed on the process start time so that when the kernel reuses a
+    pid for a new process the stale name is dropped and re-resolved — otherwise
+    long-running `top`/TUI sessions mislabel reused pids.
+    """
+    start = _proc_start_abstime(pid)
+    cached = _name_cache.get(pid)
+    if cached is not None and cached[0] == start:
+        return cached[1]
     buf = ctypes.create_string_buffer(PROC_PIDPATHINFO_MAXSIZE)
-    n = _libc.proc_pidpath(ctypes.c_int(pid), buf, PROC_PIDPATHINFO_MAXSIZE)
+    n = _libc.proc_pidpath(pid, buf, PROC_PIDPATHINFO_MAXSIZE)
     if n > 0:
         name = os.path.basename(buf.value.decode("utf-8", "replace"))
     else:
         name = "?"
-    _name_cache[pid] = name
+    _name_cache[pid] = (start, name)
     return name
 
 
@@ -345,7 +374,7 @@ def resolve_volume(arg):
             targets.append((dev, mp))
         elif dev == dev_arg:                               # exact device node
             targets.append((dev, mp))
-        elif arg.startswith("disk") and dev.startswith(dev_arg):  # whole disk -> all slices
+        elif arg.startswith("disk") and (dev == dev_arg or dev.startswith(dev_arg + "s")):  # whole disk -> all slices
             targets.append((dev, mp))
     # de-dup preserving order
     seen = set()
