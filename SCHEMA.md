@@ -236,8 +236,33 @@ verdict is present.
 `critical`. `life` is `null` when wear is too low to extrapolate. Exit: `1` if
 any drive is `critical` (so `smart` doubles as a health check), else `0`.
 
+## `checkup`
+
+A one-shot cross-scope exam. `vitals` holds a per-scope summary; `findings` is
+sorted worst-first with a drill-down command each; `overall` is the worst
+severity (info-level notes stay `ok`).
+
+```json
+{
+  "schema": 1, "scope": "checkup", "command": "checkup", "overall": "warn",
+  "findings": [
+    {"severity": "warn", "area": "battery",
+     "message": "battery condition: Service Recommended (health 78%, 900 cycles)",
+     "drill": "stethoscope battery health"}
+  ],
+  "vitals": {
+    "cpu": {"system_cpu_pct": 42.1, "ncpu": 8, "top": {"pid": 1, "name": "x", "cpu_pct": 30.0}},
+    "memory": {"pressure": "warn", "used": 6039797760, "total": 8589934592, "used_pct": 70.3},
+    "battery": {"present": true, "charge_pct": 61, "health_pct": 81.1, "cycle_count": 371, "condition": "Normal"},
+    "smart": {"drives": [{"device": "disk0", "name": "…", "smart_status": "verified", "percentage_used": 3, "worst_severity": "ok"}]}
+  }
+}
+```
+
+Exit: `1` when `overall` is `critical`, else `0`.
+
 ## Changelog
 
 - **schema 1** — initial contract: `disk` `top`/`holds`/`busy`, `cpu`
   `top`/`wakeups`, `memory` `top`/`watch`, `battery` `health`/`top`/`drainers`,
-  `smart` `status`, exit codes.
+  `smart` `status`, `checkup`, exit codes.

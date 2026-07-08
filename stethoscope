@@ -13,6 +13,7 @@ reusable data layer in scopes/<name>.py.
   stethoscope memory <cmd>    per-process footprint and leak watching
   stethoscope battery <cmd>   power drain and battery health
   stethoscope smart [disk]    drive health, wear, and life expectancy
+  stethoscope checkup         one-shot full-body exam across every scope
 
 No third-party dependencies — system Python 3 only.
 """
@@ -45,6 +46,7 @@ scopes:
             drainers        cumulative drain since you unplugged
   smart   drive health, wear, and life expectancy
             [disk]          SMART status + wear + pre-failure warnings
+  checkup one-shot full-body exam — samples every scope, prints a verdict
 
 agent/scripting: --json --once --duration N on the sampling commands
 
@@ -64,6 +66,7 @@ SCOPES = {
     "memory": {"module": "scopes.memory"},
     "battery": {"module": "scopes.battery"},
     "smart": {"module": "scopes.smart"},
+    "checkup": {"module": "scopes.checkup"},
 }
 
 
