@@ -11,7 +11,8 @@ reusable data layer in scopes/<name>.py.
   stethoscope disk <cmd>      per-process disk I/O, holds, eject blockers
   stethoscope cpu <cmd>       per-process CPU utilization and wakeups
   stethoscope memory <cmd>    per-process footprint and leak watching
-  (planned: battery, smart — see the repo roadmap)
+  stethoscope battery <cmd>   power drain and battery health
+  (planned: smart — see the repo roadmap)
 
 No third-party dependencies — system Python 3 only.
 """
@@ -38,8 +39,12 @@ scopes:
   memory  per-process footprint and leak watching
             top             who is using memory now (default)
             watch <pid>     footprint slope over time (leak trend)
+  battery per-process power drain and battery health
+            health          charge, cycles, capacity, condition (default)
+            top             who is drawing power now
+            drainers        cumulative drain since you unplugged
 
-planned scopes: battery, smart  (see roadmap)
+planned scopes: smart  (see roadmap)
 
 agent/scripting: --json --once --duration N on the sampling commands
 
@@ -57,6 +62,7 @@ SCOPES = {
     "disk": {"module": "scopes.disk", "tui": "scopes.disk_tui"},
     "cpu": {"module": "scopes.cpu"},
     "memory": {"module": "scopes.memory"},
+    "battery": {"module": "scopes.battery"},
 }
 
 

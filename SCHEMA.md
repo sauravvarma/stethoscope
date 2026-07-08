@@ -156,7 +156,61 @@ One document per sample while watching a single pid's footprint trend.
 `leak_candidate` is true once the slope is sustained (> 1 MB/min, ≥ 5 samples).
 Exit: `1` if a leak candidate was seen, else `0`.
 
+## `battery health`
+
+No sampling — one document. `present` is `false` on a desktop with no battery.
+
+```json
+{
+  "schema": 1, "scope": "battery", "command": "health", "present": true,
+  "charge_pct": 62, "state": "discharging", "time_remaining": "2:31",
+  "cycle_count": 371, "health_pct": 81.1, "condition": "Normal",
+  "design_capacity_mah": 4382, "max_capacity_mah": 3555,
+  "temperature_c": 30.9, "charging": false, "external_connected": false,
+  "fully_charged": false, "serial": "…"
+}
+```
+
+`health_pct` is max capacity ÷ design; `condition` is `Service Recommended`
+when the gauge reports a permanent failure or health < 80%. Exit: `0`.
+
+## `battery top`
+
+Live per-process **energy-impact score** (a transparent proxy: `cpu_pct` plus
+weighted idle/interrupt wakeups — not macOS's private Energy Impact). One
+document per sample.
+
+```json
+{
+  "schema": 1, "scope": "battery", "command": "top",
+  "processes": [
+    {"pid": 1653, "name": "avconferenced", "energy_score": 24.4,
+     "cpu_pct": 4.1, "idle_wakeups_per_s": 0.0, "interrupt_wakeups_per_s": 288.0}
+  ]
+}
+```
+
+## `battery drainers`
+
+Cumulative energy impact since the last unplug, using a baseline file. When on
+AC or with no baseline yet, it (re)sets the baseline and returns
+`baseline_reset: true`.
+
+```json
+{
+  "schema": 1, "scope": "battery", "command": "drainers",
+  "baseline_reset": false, "charge_pct": 55, "charge_drop": 12, "elapsed_s": 3600.0,
+  "drainers": [
+    {"pid": 1653, "name": "avconferenced", "energy_score": 84.2,
+     "cpu_seconds": 42.1, "idle_wakeups": 1200, "interrupt_wakeups": 90000}
+  ]
+}
+```
+
+Exit: `0`.
+
 ## Changelog
 
 - **schema 1** — initial contract: `disk` `top`/`holds`/`busy`, `cpu`
-  `top`/`wakeups`, `memory` `top`/`watch`, exit codes.
+  `top`/`wakeups`, `memory` `top`/`watch`, `battery`
+  `health`/`top`/`drainers`, exit codes.
