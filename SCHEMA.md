@@ -261,6 +261,65 @@ severity (info-level notes stay `ok`).
 
 Exit: `1` when `overall` is `critical`, else `0`.
 
+## `triage`
+
+Runs anomaly detectors (baseline deviation, leak candidates, runaways) plus
+point-in-time health signals. `overall` is the worst finding severity.
+
+```json
+{
+  "schema": 1, "scope": "triage", "command": "triage",
+  "db": "/Users/me/Library/Application Support/stethoscope/history.db",
+  "overall": "critical",
+  "findings": [
+    {"severity": "critical", "area": "memory", "detector": "leak",
+     "message": "worker (pid 123) footprint is rising 12.4 MB/min (now 1.2G)",
+     "drill": "stethoscope memory watch 123", "score": 15237.1,
+     "pid": 123, "name": "worker", "metric": "process_footprint",
+     "slope_mb_per_min": 12.4, "current_footprint": 1288490188, "samples": 12}
+  ],
+  "vitals": {
+    "cpu": {"system_cpu_pct": 42.1, "ncpu": 8},
+    "memory": {"pressure": "normal", "used": 6039797760, "total": 8589934592},
+    "battery": {"present": true, "condition": "Normal"},
+    "smart": {"drives": []},
+    "disk": {"read_per_s": 158105.6, "write_per_s": 134348.8}
+  },
+  "notes": ["history DB has no samples yet; run `stethoscope record` to build a baseline"]
+}
+```
+
+Findings are sorted worst-first, then by detector score. Every finding includes a
+`drill` command to confirm it. Exit: `1` when `overall` is `critical`, else `0`.
+
+## `anomaly deviation` / `anomaly leaks` / `anomaly runaway`
+
+Individual detector documents share `scope: "anomaly"`, `command` set to the
+detector name, `db`, `since`, `findings`, and `notes`.
+
+```json
+{
+  "schema": 1, "scope": "anomaly", "command": "deviation",
+  "db": "/Users/me/Library/Application Support/stethoscope/history.db",
+  "since": 1784656400,
+  "current": [{"scope": "cpu", "metric": "system_cpu_pct", "value": 95.0}],
+  "findings": [
+    {"severity": "critical", "area": "cpu", "detector": "deviation",
+     "metric": "system_cpu_pct", "current": 95.0,
+     "baseline": {"hour": 9, "count": 30, "p50": 18.4, "p90": 62.1, "p99": 91.0},
+     "drill": "stethoscope cpu top", "score": 1.044,
+     "message": "cpu.system_cpu_pct 95.00 is above this hour's p99 91.00"}
+  ],
+  "notes": []
+}
+```
+
+`anomaly leaks` uses recorded `memory.process_footprint` rows when available and
+otherwise samples live briefly (`--duration`, `--interval`). `anomaly runaway`
+compares current `cpu.process_cpu_pct` against per-pid recorded norms when
+available and otherwise applies absolute CPU/wakeup thresholds. Exit: `1` if an
+individual detector emits any critical finding, else `0`.
+
 ## `record`
 
 Foreground sampler that appends one SQLite history row per metric. With
@@ -334,5 +393,5 @@ Exit: `0`.
 
 - **schema 1** — initial contract: `disk` `top`/`holds`/`busy`, `cpu`
   `top`/`wakeups`, `memory` `top`/`watch`, `battery` `health`/`top`/`drainers`,
-  `smart` `status`, `checkup`, `record`, `history`/`history baseline`, exit
-  codes.
+  `smart` `status`, `checkup`, `triage`, `anomaly` detectors, `record`,
+  `history`/`history baseline`, exit codes.
