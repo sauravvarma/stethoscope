@@ -1,0 +1,15 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show Python
+        run: python3 --version
+      - name: Run tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
