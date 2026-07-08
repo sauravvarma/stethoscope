@@ -261,8 +261,78 @@ severity (info-level notes stay `ok`).
 
 Exit: `1` when `overall` is `critical`, else `0`.
 
+## `record`
+
+Foreground sampler that appends one SQLite history row per metric. With
+`--once`, exactly one sample is written; otherwise it samples every
+`--interval N` seconds and prunes rows older than `--max-age-days N`.
+
+```json
+{
+  "schema": 1, "scope": "record", "command": "record",
+  "db": "/Users/me/Library/Application Support/stethoscope/history.db",
+  "cutoff": 1783450000,
+  "rows_written": 18,
+  "sample": {
+    "ts": 1784660000, "interval": 60.0,
+    "cpu": {"system_cpu_pct": 42.1},
+    "memory": {"used": 6039797760, "total": 8589934592, "pressure": "normal"},
+    "battery": {"present": true, "charge_pct": 61, "health_pct": 81.1},
+    "disk": {"read_per_s": 158105.6, "write_per_s": 134348.8},
+    "record": {"rows": 18}
+  }
+}
+```
+
+The SQLite schema is additive and queryable:
+`samples(ts INTEGER, scope TEXT, metric TEXT, pid INTEGER, name TEXT, value REAL)`.
+System metrics use `pid: null`; optional top-process metrics carry `pid`/`name`.
+The sampler also records its own footprint as `record.self_*`. Exit: `0`.
+
+## `history`
+
+Queries recorded samples since a relative (`1h`, `30m`, `2d`, `3am`) or ISO
+timestamp. `--scope` filters summaries to one scope.
+
+```json
+{
+  "schema": 1, "scope": "history", "command": "query",
+  "since": 1784656400, "until": 1784660000, "scope_filter": null,
+  "metrics": [
+    {"scope": "cpu", "metric": "system_cpu_pct", "count": 60,
+     "min": 8.0, "max": 143.9, "peak": 143.9, "mean": 31.2,
+     "latest": {"value": 42.1, "ts": 1784660000}}
+  ],
+  "top_consumers": [
+    {"scope": "cpu", "metric": "process_cpu_pct", "pid": 29641,
+     "name": "copilot", "count": 4, "peak": 93.9, "mean": 51.2}
+  ]
+}
+```
+
+Exit: `0` on a valid query, even when no rows match.
+
+## `history baseline`
+
+Computes this machine's normal per-hour-of-day percentiles from recorded system
+metrics (`pid: null` rows only). `--since` and `--scope` are optional filters.
+
+```json
+{
+  "schema": 1, "scope": "history", "command": "baseline",
+  "since": null, "scope_filter": null,
+  "baselines": [
+    {"hour": 9, "scope": "cpu", "metric": "system_cpu_pct",
+     "count": 30, "p50": 18.4, "p90": 62.1, "p99": 91.0}
+  ]
+}
+```
+
+Exit: `0`.
+
 ## Changelog
 
 - **schema 1** — initial contract: `disk` `top`/`holds`/`busy`, `cpu`
   `top`/`wakeups`, `memory` `top`/`watch`, `battery` `health`/`top`/`drainers`,
-  `smart` `status`, `checkup`, exit codes.
+  `smart` `status`, `checkup`, `record`, `history`/`history baseline`, exit
+  codes.
