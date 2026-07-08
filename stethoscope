@@ -12,7 +12,7 @@ reusable data layer in scopes/<name>.py.
   stethoscope cpu <cmd>       per-process CPU utilization and wakeups
   stethoscope memory <cmd>    per-process footprint and leak watching
   stethoscope battery <cmd>   power drain and battery health
-  (planned: smart — see the repo roadmap)
+  stethoscope smart [disk]    drive health, wear, and life expectancy
 
 No third-party dependencies — system Python 3 only.
 """
@@ -43,8 +43,8 @@ scopes:
             health          charge, cycles, capacity, condition (default)
             top             who is drawing power now
             drainers        cumulative drain since you unplugged
-
-planned scopes: smart  (see roadmap)
+  smart   drive health, wear, and life expectancy
+            [disk]          SMART status + wear + pre-failure warnings
 
 agent/scripting: --json --once --duration N on the sampling commands
 
@@ -63,6 +63,7 @@ SCOPES = {
     "cpu": {"module": "scopes.cpu"},
     "memory": {"module": "scopes.memory"},
     "battery": {"module": "scopes.battery"},
+    "smart": {"module": "scopes.smart"},
 }
 
 

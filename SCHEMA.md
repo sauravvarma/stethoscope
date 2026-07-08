@@ -209,8 +209,35 @@ AC or with no baseline yet, it (re)sets the baseline and returns
 
 Exit: `0`.
 
+## `smart [disk]`
+
+SMART health for each physical drive (or one named `disk`). No sampling — one
+document. Fields beyond `smart_status` require `smartctl`; without it only the
+verdict is present.
+
+```json
+{
+  "schema": 1, "scope": "smart", "command": "status",
+  "drives": [
+    {"device": "disk0", "internal": true, "source": "smartctl",
+     "name": "APPLE SSD AP0256Q", "size_bytes": 251000193024, "solid_state": true,
+     "smart_status": "verified", "passed": true, "percentage_used": 3,
+     "power_on_hours": 1393, "tbw_tb": 30.18, "available_spare": 100,
+     "available_spare_threshold": 99, "media_errors": 0, "temperature_c": 45,
+     "life": {"remaining_life_pct": 97, "remaining_hours": 45040,
+              "remaining_years": 5.1, "confidence": "moderate"},
+     "warnings": [{"severity": "warn", "message": "…"}],
+     "worst_severity": "ok"}
+  ]
+}
+```
+
+`warnings[].severity` is `critical` or `warn`; `worst_severity` is `ok`/`warn`/
+`critical`. `life` is `null` when wear is too low to extrapolate. Exit: `1` if
+any drive is `critical` (so `smart` doubles as a health check), else `0`.
+
 ## Changelog
 
 - **schema 1** — initial contract: `disk` `top`/`holds`/`busy`, `cpu`
-  `top`/`wakeups`, `memory` `top`/`watch`, `battery`
-  `health`/`top`/`drainers`, exit codes.
+  `top`/`wakeups`, `memory` `top`/`watch`, `battery` `health`/`top`/`drainers`,
+  `smart` `status`, exit codes.
