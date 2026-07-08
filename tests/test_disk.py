@@ -5,13 +5,17 @@ Every kernel/subprocess boundary is faked, so these run on any macOS box
 external volumes, or live processes.
 """
 
+import io
+import json
 import os
 import sys
 import unittest
+from contextlib import redirect_stdout
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scopes"))
 import disk  # noqa: E402
+import output  # noqa: E402
 
 
 def _fake_run(stdout):
@@ -184,6 +188,67 @@ class TestProcNameCache(unittest.TestCase):
     # disk module re-exports it. This asserts the re-export stays wired up.
     def test_disk_reexports_core_proc_name(self):
         self.assertIs(disk.proc_name, disk.core.proc_name)
+
+
+class TestDiskJsonContract(unittest.TestCase):
+    """--json shapes and exit codes for top / holds / busy (see SCHEMA.md)."""
+
+    def test_top_document_shape(self):
+        rows = [(300.0, 200.0, 100.0, 1000, 500, 1, "p1")]
+        doc = disk._top_document(rows, 200.0, 100.0, 20)
+        self.assertEqual((doc["scope"], doc["command"]), ("disk", "top"))
+        self.assertEqual(doc["system"], {"read_per_s": 200.0, "write_per_s": 100.0})
+        self.assertEqual(doc["processes"][0]["pid"], 1)
+        self.assertEqual(doc["processes"][0]["read_per_s"], 200.0)
+
+    def test_holds_json_and_exit_ok(self):
+        o = output.parse_opts(["--json"])
+        with mock.patch.object(disk, "proc_diskio", return_value=(16384, 0)), \
+                mock.patch.object(disk, "open_files",
+                                  return_value=[("working dir (cwd)", "DIR", "/x")]), \
+                mock.patch.object(disk, "proc_name", return_value="bash"):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = disk.cmd_holds(1000, o)
+        doc = json.loads(buf.getvalue())
+        self.assertEqual(rc, output.EXIT_OK)
+        self.assertEqual(doc["command"], "holds")
+        self.assertEqual(doc["cumulative"], {"read": 16384, "write": 0})
+        self.assertEqual(doc["holds"][0]["path"], "/x")
+
+    def test_busy_json_exit_is_findings_when_holders(self):
+        o = output.parse_opts(["--json"])
+        procs = {1263: {"name": "mds", "user": "root",
+                        "holds": [("open (read)", "/Volumes/X/a")]}}
+        with mock.patch.object(disk, "resolve_volume",
+                               return_value=[("/dev/disk6s2", "/Volumes/X")]), \
+                mock.patch.object(disk, "collect_holders", return_value=procs), \
+                mock.patch.object(disk, "proc_diskio", return_value=None):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = disk.cmd_busy("/Volumes/X", o)
+        doc = json.loads(buf.getvalue())
+        self.assertEqual(rc, output.EXIT_FINDINGS)
+        self.assertEqual(doc["holders"][0]["pid"], 1263)
+        self.assertIsNone(doc["holders"][0]["io"])
+
+    def test_busy_json_exit_is_ok_when_clean(self):
+        o = output.parse_opts(["--json"])
+        with mock.patch.object(disk, "resolve_volume",
+                               return_value=[("/dev/disk6s2", "/Volumes/X")]), \
+                mock.patch.object(disk, "collect_holders", return_value={}):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = disk.cmd_busy("/Volumes/X", o)
+        self.assertEqual(rc, output.EXIT_OK)
+
+    def test_busy_no_target_is_usage(self):
+        o = output.parse_opts(["--json"])
+        with mock.patch.object(disk, "resolve_volume", return_value=[]):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = disk.cmd_busy("nope", o)
+        self.assertEqual(rc, output.EXIT_USAGE)
 
 
 if __name__ == "__main__":
