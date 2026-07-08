@@ -121,7 +121,42 @@ One document per sample (same `--once` / `--duration` behavior as `disk top`).
 reads ~`200.0`, and `system.cpu_pct` sums all processes (approaches
 `ncpu × 100`). Exit: `0`.
 
+## `memory top`
+
+Ranks `processes` by `footprint` (bytes). One document per sample. `system`
+summarises memory in bytes plus a `pressure` string (`normal`/`warn`/`critical`).
+
+```json
+{
+  "schema": 1, "scope": "memory", "command": "top",
+  "system": {"total": 8589934592, "used": 6039797760, "free": 121667584,
+             "active": 1395916800, "inactive": 1289748480,
+             "wired": 2299002880, "compressed": 2744877056, "pressure": "warn"},
+  "processes": [
+    {"pid": 1234, "name": "WindowServer", "footprint": 734003200, "resident": 812345344}
+  ]
+}
+```
+
+Exit: `0`.
+
+## `memory watch <pid>`
+
+One document per sample while watching a single pid's footprint trend.
+
+```json
+{
+  "schema": 1, "scope": "memory", "command": "watch",
+  "pid": 1234, "name": "leaky", "footprint": 524288000, "resident": 560000000,
+  "slope_mb_per_min": 12.4, "samples": 30, "leak_candidate": true
+}
+```
+
+`slope_mb_per_min` is a least-squares fit over the samples so far;
+`leak_candidate` is true once the slope is sustained (> 1 MB/min, ≥ 5 samples).
+Exit: `1` if a leak candidate was seen, else `0`.
+
 ## Changelog
 
 - **schema 1** — initial contract: `disk` `top`/`holds`/`busy`, `cpu`
-  `top`/`wakeups`, exit codes.
+  `top`/`wakeups`, `memory` `top`/`watch`, exit codes.
