@@ -1,0 +1,232 @@
+"""
+stethoscope core.rusage — the libproc / proc_pid_rusage probe.
+
+The kernel keeps a per-process ledger of cumulative counters — CPU time,
+wakeups, disk bytes, memory footprint, billed energy — readable via
+`proc_pid_rusage()`. This module owns that binding for every scope
+(disk today, cpu and battery next), read at flavor RUSAGE_INFO_V4.
+
+Two contracts this module exists to enforce (Appendix A of ARCHITECTURE.md,
+findings S9 and S2):
+
+  * The struct is declared IN FULL. proc_pid_rusage copies
+    sizeof(rusage_info_v4) bytes for flavor 4 regardless of what the caller
+    allocated — a prefix struct is heap corruption, not an optimization.
+    35 uint64 fields + a 16-byte uuid = 296 bytes; sizeof-asserted below and
+    verified against the live SDK header by `python3 -m core.validate`.
+
+  * Time fields (ri_user_time, ri_system_time, the QoS times,
+    ri_runnable_time, ri_proc_start_abstime) are mach-abstime TICKS, not
+    nanoseconds. On Apple Silicon the timebase is 125/3 — a 41.7x error if
+    read raw (Intel is 1/1, which is how the bug hides). Conversion happens
+    HERE, once; callers of the public API never see raw ticks.
+
+No third-party dependencies — system Python 3 + ctypes only.
+"""
+
+import ctypes
+import os
+import time
+
+_libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+
+PROC_ALL_PIDS = 1
+RUSAGE_INFO_V4 = 4
+PROC_PIDPATHINFO_MAXSIZE = 4 * 1024
+
+# Declared signatures: without argtypes/restype, ctypes defaults every
+# argument to int-sized — pointers truncate on 64-bit and mistakes pass
+# silently instead of raising ArgumentError.
+_libc.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32,
+                                ctypes.c_void_p, ctypes.c_int]
+_libc.proc_listpids.restype = ctypes.c_int
+_libc.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+_libc.proc_pid_rusage.restype = ctypes.c_int
+_libc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+_libc.proc_pidpath.restype = ctypes.c_int
+
+
+class RUsageInfoV4(ctypes.Structure):
+    """struct rusage_info_v4 — complete, matching the SDK's sys/resource.h.
+
+    Never truncate this: the kernel writes sizeof(rusage_info_v4) bytes
+    for flavor 4 (S9). Field list derived from the header on this machine.
+    """
+    _fields_ = [
+        ("ri_uuid", ctypes.c_uint8 * 16),
+        ("ri_user_time", ctypes.c_uint64),
+        ("ri_system_time", ctypes.c_uint64),
+        ("ri_pkg_idle_wkups", ctypes.c_uint64),
+        ("ri_interrupt_wkups", ctypes.c_uint64),
+        ("ri_pageins", ctypes.c_uint64),
+        ("ri_wired_size", ctypes.c_uint64),
+        ("ri_resident_size", ctypes.c_uint64),
+        ("ri_phys_footprint", ctypes.c_uint64),
+        ("ri_proc_start_abstime", ctypes.c_uint64),
+        ("ri_proc_exit_abstime", ctypes.c_uint64),
+        ("ri_child_user_time", ctypes.c_uint64),
+        ("ri_child_system_time", ctypes.c_uint64),
+        ("ri_child_pkg_idle_wkups", ctypes.c_uint64),
+        ("ri_child_interrupt_wkups", ctypes.c_uint64),
+        ("ri_child_pageins", ctypes.c_uint64),
+        ("ri_child_elapsed_abstime", ctypes.c_uint64),
+        ("ri_diskio_bytesread", ctypes.c_uint64),
+        ("ri_diskio_byteswritten", ctypes.c_uint64),
+        ("ri_cpu_time_qos_default", ctypes.c_uint64),
+        ("ri_cpu_time_qos_maintenance", ctypes.c_uint64),
+        ("ri_cpu_time_qos_background", ctypes.c_uint64),
+        ("ri_cpu_time_qos_utility", ctypes.c_uint64),
+        ("ri_cpu_time_qos_legacy", ctypes.c_uint64),
+        ("ri_cpu_time_qos_user_initiated", ctypes.c_uint64),
+        ("ri_cpu_time_qos_user_interactive", ctypes.c_uint64),
+        ("ri_billed_system_time", ctypes.c_uint64),
+        ("ri_serviced_system_time", ctypes.c_uint64),
+        ("ri_logical_writes", ctypes.c_uint64),
+        ("ri_lifetime_max_phys_footprint", ctypes.c_uint64),
+        ("ri_instructions", ctypes.c_uint64),
+        ("ri_cycles", ctypes.c_uint64),
+        ("ri_billed_energy", ctypes.c_uint64),
+        ("ri_serviced_energy", ctypes.c_uint64),
+        ("ri_interval_max_phys_footprint", ctypes.c_uint64),
+        ("ri_runnable_time", ctypes.c_uint64),
+    ]
+
+
+# 16-byte uuid + 35 x uint64 = 296. If this trips, the field list above has
+# drifted from the header — fix the list, never the assert.
+assert ctypes.sizeof(RUsageInfoV4) == 296
+
+
+# ---------------------------------------------------------------------------
+# mach timebase — ticks -> nanoseconds (S2)
+# ---------------------------------------------------------------------------
+
+class _MachTimebaseInfo(ctypes.Structure):
+    _fields_ = [("numer", ctypes.c_uint32), ("denom", ctypes.c_uint32)]
+
+
+_tb = _MachTimebaseInfo()
+_libc.mach_timebase_info(ctypes.byref(_tb))
+TIMEBASE_NUMER = _tb.numer
+TIMEBASE_DENOM = _tb.denom
+
+_libc.mach_absolute_time.restype = ctypes.c_uint64
+
+
+def mach_absolute_time():
+    """Current mach-abstime tick count (raw; convert via ticks_to_ns)."""
+    return _libc.mach_absolute_time()
+
+
+def ticks_to_ns(t):
+    """mach-abstime ticks -> nanoseconds. 125/3 on Apple Silicon, 1/1 Intel."""
+    return t * TIMEBASE_NUMER // TIMEBASE_DENOM
+
+
+def _ticks_to_s(t):
+    return ticks_to_ns(t) / 1e9
+
+
+# ---------------------------------------------------------------------------
+# public API
+# ---------------------------------------------------------------------------
+
+def list_pids():
+    """Return a list of all pids via proc_listpids(PROC_ALL_PIDS)."""
+    # First call with NULL buffer to learn the required size.
+    needed = _libc.proc_listpids(PROC_ALL_PIDS, 0, None, 0)
+    if needed <= 0:
+        return []
+    count = needed // ctypes.sizeof(ctypes.c_int32)
+    # Over-allocate a little; the pid table can grow between the two calls.
+    count += 32
+    buf = (ctypes.c_int32 * count)()
+    got = _libc.proc_listpids(PROC_ALL_PIDS, 0, buf, ctypes.sizeof(buf))
+    if got <= 0:
+        return []
+    n = got // ctypes.sizeof(ctypes.c_int32)
+    return [buf[i] for i in range(n) if buf[i] != 0]
+
+
+def _raw_rusage(pid):
+    """Raw RUsageInfoV4 for pid, or None on EPERM/ESRCH."""
+    info = RUsageInfoV4()
+    rc = _libc.proc_pid_rusage(ctypes.c_int(pid), ctypes.c_int(RUSAGE_INFO_V4),
+                               ctypes.byref(info))
+    if rc != 0:
+        return None
+    return info
+
+
+def rusage(pid):
+    """Converted vitals-ready counters for pid, or None if inaccessible.
+
+    All time fields are seconds (timebase-converted); energy is nanojoules
+    as billed; sizes are bytes. start_time_epoch is Unix time derived from
+    ri_proc_start_abstime against mach_absolute_time now.
+    """
+    info = _raw_rusage(pid)
+    if info is None:
+        return None
+    now_ticks = mach_absolute_time()
+    return {
+        "cpu_user_s": _ticks_to_s(info.ri_user_time),
+        "cpu_system_s": _ticks_to_s(info.ri_system_time),
+        "pkg_idle_wakeups": info.ri_pkg_idle_wkups,
+        "interrupt_wakeups": info.ri_interrupt_wkups,
+        "diskio_bytes_read": info.ri_diskio_bytesread,
+        "diskio_bytes_written": info.ri_diskio_byteswritten,
+        "phys_footprint_bytes": info.ri_phys_footprint,
+        "billed_energy_nj": info.ri_billed_energy,
+        "qos_time_s": {
+            "default": _ticks_to_s(info.ri_cpu_time_qos_default),
+            "maintenance": _ticks_to_s(info.ri_cpu_time_qos_maintenance),
+            "background": _ticks_to_s(info.ri_cpu_time_qos_background),
+            "utility": _ticks_to_s(info.ri_cpu_time_qos_utility),
+            "legacy": _ticks_to_s(info.ri_cpu_time_qos_legacy),
+            "user_initiated": _ticks_to_s(info.ri_cpu_time_qos_user_initiated),
+            "user_interactive": _ticks_to_s(info.ri_cpu_time_qos_user_interactive),
+        },
+        "billed_system_s": _ticks_to_s(info.ri_billed_system_time),
+        "serviced_system_s": _ticks_to_s(info.ri_serviced_system_time),
+        "runnable_s": _ticks_to_s(info.ri_runnable_time),
+        "start_time_epoch": time.time()
+                            - _ticks_to_s(now_ticks - info.ri_proc_start_abstime),
+    }
+
+
+def proc_diskio(pid):
+    """Return (bytes_read, bytes_written) cumulative for pid, or None if inaccessible."""
+    info = _raw_rusage(pid)
+    if info is None:
+        return None
+    return (info.ri_diskio_bytesread, info.ri_diskio_byteswritten)
+
+
+def proc_identity(pid):
+    """(pid, start_abstime_ticks) — the sample identity that survives pid reuse.
+
+    Raw ticks on purpose: this is an opaque key, not a duration. None if
+    inaccessible. (S10)
+    """
+    info = _raw_rusage(pid)
+    if info is None:
+        return None
+    return (pid, info.ri_proc_start_abstime)
+
+
+_name_cache = {}
+
+
+def proc_name(pid):
+    """Best-effort short command name for pid (cached)."""
+    if pid in _name_cache:
+        return _name_cache[pid]
+    buf = ctypes.create_string_buffer(PROC_PIDPATHINFO_MAXSIZE)
+    n = _libc.proc_pidpath(ctypes.c_int(pid), buf, PROC_PIDPATHINFO_MAXSIZE)
+    if n > 0:
+        name = os.path.basename(buf.value.decode("utf-8", "replace"))
+    else:
+        name = "?"
+    _name_cache[pid] = name
+    return name

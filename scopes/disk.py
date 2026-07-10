@@ -29,7 +29,6 @@ io provider is unreliable, so it is not a dependable spine for this tool.
 No third-party dependencies — system Python 3 + ctypes only.
 """
 
-import ctypes
 import os
 import re
 import sys
@@ -38,83 +37,19 @@ import signal
 import subprocess
 
 # ---------------------------------------------------------------------------
-# libproc / rusage bindings
+# probe — libproc / rusage bindings live in core/rusage.py, shared by every
+# scope. Re-exported here so the TUI's `d.<name>` references keep working.
 # ---------------------------------------------------------------------------
 
-_libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+try:
+    from core import rusage                # via the stethoscope dispatcher
+except ImportError:                        # run directly: ./scopes/disk.py
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from core import rusage
 
-PROC_ALL_PIDS = 1
-RUSAGE_INFO_V2 = 2
-PROC_PIDPATHINFO_MAXSIZE = 4 * 1024
-
-
-class RUsageInfoV2(ctypes.Structure):
-    """Prefix of rusage_info_v2 up to the two fields we need."""
-    _fields_ = [
-        ("ri_uuid", ctypes.c_uint8 * 16),
-        ("ri_user_time", ctypes.c_uint64),
-        ("ri_system_time", ctypes.c_uint64),
-        ("ri_pkg_idle_wkups", ctypes.c_uint64),
-        ("ri_interrupt_wkups", ctypes.c_uint64),
-        ("ri_pageins", ctypes.c_uint64),
-        ("ri_wired_size", ctypes.c_uint64),
-        ("ri_resident_size", ctypes.c_uint64),
-        ("ri_phys_footprint", ctypes.c_uint64),
-        ("ri_proc_start_abstime", ctypes.c_uint64),
-        ("ri_proc_exit_abstime", ctypes.c_uint64),
-        ("ri_child_user_time", ctypes.c_uint64),
-        ("ri_child_system_time", ctypes.c_uint64),
-        ("ri_child_pkg_idle_wkups", ctypes.c_uint64),
-        ("ri_child_interrupt_wkups", ctypes.c_uint64),
-        ("ri_child_pageins", ctypes.c_uint64),
-        ("ri_child_elapsed_abstime", ctypes.c_uint64),
-        ("ri_diskio_bytesread", ctypes.c_uint64),
-        ("ri_diskio_byteswritten", ctypes.c_uint64),
-    ]
-
-
-def list_pids():
-    """Return a list of all pids via proc_listpids(PROC_ALL_PIDS)."""
-    # First call with NULL buffer to learn the required size.
-    needed = _libc.proc_listpids(PROC_ALL_PIDS, 0, None, 0)
-    if needed <= 0:
-        return []
-    count = needed // ctypes.sizeof(ctypes.c_int32)
-    # Over-allocate a little; the pid table can grow between the two calls.
-    count += 32
-    buf = (ctypes.c_int32 * count)()
-    got = _libc.proc_listpids(PROC_ALL_PIDS, 0, buf, ctypes.sizeof(buf))
-    if got <= 0:
-        return []
-    n = got // ctypes.sizeof(ctypes.c_int32)
-    return [buf[i] for i in range(n) if buf[i] != 0]
-
-
-def proc_diskio(pid):
-    """Return (bytes_read, bytes_written) cumulative for pid, or None if inaccessible."""
-    info = RUsageInfoV2()
-    rc = _libc.proc_pid_rusage(ctypes.c_int(pid), ctypes.c_int(RUSAGE_INFO_V2),
-                               ctypes.byref(info))
-    if rc != 0:
-        return None
-    return (info.ri_diskio_bytesread, info.ri_diskio_byteswritten)
-
-
-_name_cache = {}
-
-
-def proc_name(pid):
-    """Best-effort short command name for pid (cached)."""
-    if pid in _name_cache:
-        return _name_cache[pid]
-    buf = ctypes.create_string_buffer(PROC_PIDPATHINFO_MAXSIZE)
-    n = _libc.proc_pidpath(ctypes.c_int(pid), buf, PROC_PIDPATHINFO_MAXSIZE)
-    if n > 0:
-        name = os.path.basename(buf.value.decode("utf-8", "replace"))
-    else:
-        name = "?"
-    _name_cache[pid] = name
-    return name
+list_pids = rusage.list_pids
+proc_diskio = rusage.proc_diskio
+proc_name = rusage.proc_name
 
 
 # ---------------------------------------------------------------------------
@@ -156,12 +91,17 @@ def warn_if_not_root():
 # ---------------------------------------------------------------------------
 
 def snapshot_diskio():
-    """Return {pid: (bytes_read, bytes_written)} for every accessible process."""
+    """Return {(pid, start_abstime): (bytes_read, bytes_written)} for every
+    accessible process. Keyed on process identity, not bare pid, so a reused
+    pid cannot inherit a dead process's counters between snapshots.
+    Callers treat the keys as opaque; rank_io unpacks the pid.
+    """
     snap = {}
     for pid in list_pids():
-        io = proc_diskio(pid)
-        if io:
-            snap[pid] = io
+        info = rusage._raw_rusage(pid)
+        if info is not None:
+            snap[(pid, info.ri_proc_start_abstime)] = (
+                info.ri_diskio_bytesread, info.ri_diskio_byteswritten)
     return snap
 
 
@@ -176,8 +116,9 @@ def rank_io(prev, cur, dt):
     rows = []
     sys_dr = sys_dw = 0.0
     dt = dt or 1.0
-    for pid, (r, w) in cur.items():
-        pr, pw = prev.get(pid, (r, w))
+    for key, (r, w) in cur.items():
+        pid = key[0]
+        pr, pw = prev.get(key, (r, w))
         dr = max(0, r - pr) / dt
         dw = max(0, w - pw) / dt
         sys_dr += dr
