@@ -34,6 +34,17 @@ PROC_ALL_PIDS = 1
 RUSAGE_INFO_V4 = 4
 PROC_PIDPATHINFO_MAXSIZE = 4 * 1024
 
+# Declared signatures: without argtypes/restype, ctypes defaults every
+# argument to int-sized — pointers truncate on 64-bit and mistakes pass
+# silently instead of raising ArgumentError.
+_libc.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32,
+                                ctypes.c_void_p, ctypes.c_int]
+_libc.proc_listpids.restype = ctypes.c_int
+_libc.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+_libc.proc_pid_rusage.restype = ctypes.c_int
+_libc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+_libc.proc_pidpath.restype = ctypes.c_int
+
 
 class RUsageInfoV4(ctypes.Structure):
     """struct rusage_info_v4 — complete, matching the SDK's sys/resource.h.
