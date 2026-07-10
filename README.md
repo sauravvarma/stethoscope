@@ -124,6 +124,9 @@ They give the richest block-layer view (per-request latency, device queue) on pa
 
 ```
 stethoscope          the dispatcher — `stethoscope <scope> <command>`
+core/
+  rusage.py          the proc_pid_rusage probe — shared by every scope
+  validate.py        probe-validation harness (`python3 -m core.validate`)
 scopes/
   disk.py            disk scope: data layer + CLI commands (self-documenting header)
   disk_tui.py        disk scope: curses TUI over the same data layer
