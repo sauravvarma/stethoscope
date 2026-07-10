@@ -123,18 +123,15 @@ so flow and health are visually distinct — flagged below as an open question.
 2. **Should `C_READ`/`C_WRITE` actually get wired up** in the disk table
    (currently defined, unused), or was leaving read/write monochrome a
    deliberate low-noise choice worth keeping as-is?
-3. **Red's debut.** No scope uses red yet. Which is the first real
-   "critical" signal — a SMART pre-fail flag, a >90% full disk, a
-   battery health "Service Recommended"? Worth prototyping red on one
-   real case before it becomes a system-wide convention.
-4. **Cross-scope tab bar** — once `cpu`/`memory`/`battery`/`smart` exist,
-   does `disk tui` become `stethoscope tui` with all scopes as tabs, or do
-   scopes stay independently launched? Changes whether row 0 needs to hold
-   5 tab labels instead of 2.
-5. **Sparklines / trend cues.** Everything today is instantaneous or
-   cumulative. Does a "vitals" tool need a tiny inline trend (e.g. last 10
-   samples as a sparkline) for read/write or battery drain, and if so where
-   does it fit without breaking the one-line status bar?
+3. ~~**Red's debut.**~~ *Resolved by ARCHITECTURE.md §8: red debuts as a
+   `critical` finding in the findings strip — a verdict, not a gauge.*
+4. ~~**Cross-scope tab bar**~~ — *resolved by ARCHITECTURE.md §8: every
+   scope keeps its own `<scope> tui`, and a unified `stethoscope tui`
+   composes all scopes as tabs in row 0.*
+5. ~~**Sparklines / trend cues.**~~ *Resolved by ARCHITECTURE.md §8: yes —
+   the `Sampler`'s ring buffers already hold the last N intervals, so
+   per-row sparklines are a rendering problem; `core/tui.py` owns the
+   widgets.*
 6. **Non-color accessibility fallback.** `curses.has_colors()` is already
    checked, but is monochrome-mode information-complete (e.g. can a
    colorblind or `TERM=dumb` user still tell read from write, healthy from
