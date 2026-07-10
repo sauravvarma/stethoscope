@@ -131,7 +131,7 @@ cheap enough to poll.** Heavier tools are reserved for the `inspect` tier.
 
 | Probe | Surface | What it yields | Cost / privilege |
 |---|---|---|---|
-| `rusage` | `proc_pid_rusage()` `RUSAGE_INFO_V4` | per-pid cumulative: user/system CPU time, **pkg-idle & interrupt wakeups** (distinct vitals, §4), QoS-tier CPU time, disk bytes, footprint. Time fields are **mach-abstime ticks** — converted via `mach_timebase_info` in `core/rusage.py`, never exposed raw. `ri_billed_energy` (nJ) is lifetime-cumulative with a **lazy ledger** — deltas ≈ 0 at 1 s cadence even for a full-core burn — so it is a cross-check tier, not a polling vital | free; other users' pids need root (same rule as disk) |
+| `rusage` | `proc_pid_rusage()` `RUSAGE_INFO_V4` | per-pid cumulative: user/system CPU time, **pkg-idle & interrupt wakeups** (distinct vitals, §4), QoS-tier CPU time, disk bytes, footprint. Time fields are **mach-abstime ticks** — converted via `mach_timebase_info` in `core/rusage.py`, never exposed raw. `ri_billed_energy` (nJ) is lifetime-cumulative with a **lazy ledger** — deltas ≈ 0 at 1 s cadence even for a full-core burn — so it is a cross-check tier, not a polling vital. Flavor 6 (`RUSAGE_INFO_V6`, where the OS has it) adds `ri_energy_nj` / `ri_penergy_nj`, a ledger that **does** move at 1 s cadence (10/10 nonzero deltas under burn, casebook 0001.10) — the live per-process watts source; absent flavor 6 the value is None, never zero | free; other users' pids need root (same rule as disk) |
 | `battery` | `ioreg -rn AppleSmartBattery` | `Voltage`, `InstantAmperage` (signed, two's-complement-decoded) → **battery flow in watts**; charge %, cycle count, health. Absent on desktops | free, no root (~14 ms) |
 | `power log` | `pmset -g log` | historical: AC↔battery transitions, charge % at each event, sleep/wake/DarkWake causes | **~1.9 s / ~50 k lines per call** — parse once at startup, then tail; the live drain slope comes from polling `ioreg` `CurrentCapacity` instead |
 | `assertions` | `pmset -g assertions` | who is preventing sleep, and their stated reason | free, no root (~12 ms) |
@@ -187,14 +187,22 @@ diagnosis layer must know which is which:
   is a common answer with zero per-process CPU signature.
 
 **Process attribution** (from `rusage`):
-- `energy_score` — the primary per-process estimate, and **explicitly
-  unitless**: Apple's own Energy-Impact formula — CPU seconds and pkg-idle
-  wakeups weighted by the coefficients in the applicable `pmenergy` plist
-  (`default.plist` on Apple Silicon; the `Mac-*` plists are Intel board-ids).
-  This is what Activity Monitor's Energy pane computes; it ranks processes
-  and feeds baselines, but it is **never rendered as watts** — the
-  coefficients are dimensionless weights. True per-process watts live only
-  in the `powermetrics` inspect tier (root).
+- `energy_rate` — Δ`ri_energy_nj` / interval, **real watts at polling
+  cadence** where rusage flavor 6 exists (measured: 10/10 nonzero 1 s
+  deltas under burn — casebook 0001.10/0001.11). The primary live
+  per-process energy vital on such systems, already rendered by `cpu top`'s
+  POWER column; where flavor 6 is absent it is None and surfaces render
+  the absence, never a fabricated zero.
+- `energy_score` — the per-process estimate for systems *without* flavor 6,
+  and **explicitly unitless**: Apple's own Energy-Impact formula — CPU
+  seconds and pkg-idle wakeups weighted by the coefficients in the
+  applicable `pmenergy` plist (`default.plist` on Apple Silicon; the
+  `Mac-*` plists are Intel board-ids). This is what Activity Monitor's
+  Energy pane computes; it ranks processes and feeds baselines, but it is
+  **never rendered as watts** — the coefficients are dimensionless weights.
+  P/E-core *residency* detail stays in the `powermetrics` inspect tier
+  (root), though flavor 6's `ri_penergy_nj` gives the P-core energy share
+  for free.
 - Δ`ri_billed_energy` — the kernel's actually-billed nanojoules — is a
   **slow cross-check**, not a polling vital: the ledger updates lazily, so
   deltas are zero at 1 s cadence even for a full-core burn (measured on this
