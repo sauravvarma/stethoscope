@@ -81,3 +81,39 @@ voucher-aware split that could restore *direct* attribution and disambiguate
 daemon work done on other processes' behalf. Open thread: measure whether
 its ledger updates at usable cadence before `scopes/battery.py` is written;
 if it does, revisit 0001.8's ordering.
+
+## 0001.10 · 2026-07-10 · follow-up — V6's live field is ri_energy_nj, and it moves at 1 s
+
+Closes 0001.9's open thread, and corrects its field-name guess: the SDK
+header's `rusage_info_v6` carries no `ri_energy_billed_to_me` — the new
+energy fields are `ri_energy_nj` (total) and `ri_penergy_nj` (P-core
+share). Measured on Mac17,9 / macOS 26.4.1, 11 samples at 1 s cadence:
+
+* `ri_energy_nj`: **10/10 nonzero deltas** for a full-core burner
+  (~8.4 J/s), for `peopled` (~1.0 J/s) and `CallHistorySyncHelper`
+  (~1.2 J/s) — the same window where `ri_billed_energy` stayed 0/10 for
+  all of them (consistent with 0001.2).
+* `ri_penergy_nj` tracks P-core residency: ~100% of the burner's total,
+  ~0.2% of peopled's (an E-core resident spinner).
+
+So a real per-process **watts-at-cadence** source exists on this hardware,
+from the same syscall the scopes already poll — no root, no powermetrics.
+Reproduced permanently by `core/validate.py`'s `energy_nj cadence` check.
+
+## 0001.11 · 2026-07-10 · decision — ri_energy_nj is the live energy vital where flavor 6 exists
+
+Revises 0001.8's ordering on the strength of 0001.10 (its stated trigger):
+`Δri_energy_nj / interval` becomes the primary **live, real-watts**
+per-process signal wherever flavor 6 is available — carried by
+`core/rusage.py` (`RUsageInfoV6`, declared in full per S9;
+`proc_cpu_sample`; `rusage()['energy_nj']`) and already rendered by
+`cpu top`'s POWER column (case 0005). Where flavor 6 is absent the value
+is None and surfaces render "-" — never a fabricated zero, and never a
+silent fallback to the frozen `ri_billed_energy`. Rejected alternatives:
+keeping `energy_score` primary everywhere (0001.6 — stays as the fallback
+ranking for non-V6 systems, its unitless caveats unchanged), and
+`powermetrics` polling (0001.5 — still root-only/heavy, stays in the
+inspect tier). `ri_billed_energy` remains demoted per 0001.8. Validate's
+cadence check now also states explicitly that a frozen ledger means
+*unmeasurable, not idle* — the misreading that produced case 0005.2's
+false exoneration.

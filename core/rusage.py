@@ -4,7 +4,9 @@ stethoscope core.rusage — the libproc / proc_pid_rusage probe.
 The kernel keeps a per-process ledger of cumulative counters — CPU time,
 wakeups, disk bytes, memory footprint, billed energy — readable via
 `proc_pid_rusage()`. This module owns that binding for every scope
-(disk today, cpu and battery next), read at flavor RUSAGE_INFO_V4.
+(disk and cpu today, battery next), read at flavor RUSAGE_INFO_V4, plus
+RUSAGE_INFO_V6 where available for ri_energy_nj — the energy ledger that
+moves at polling cadence, unlike ri_billed_energy (casebook 0001.10).
 
 Two contracts this module exists to enforce (Appendix A of ARCHITECTURE.md,
 findings S9 and S2):
@@ -32,6 +34,7 @@ _libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
 
 PROC_ALL_PIDS = 1
 RUSAGE_INFO_V4 = 4
+RUSAGE_INFO_V6 = 6
 PROC_PIDPATHINFO_MAXSIZE = 4 * 1024
 
 # Declared signatures: without argtypes/restype, ctypes defaults every
@@ -97,6 +100,37 @@ class RUsageInfoV4(ctypes.Structure):
 assert ctypes.sizeof(RUsageInfoV4) == 296
 
 
+class RUsageInfoV6(ctypes.Structure):
+    """struct rusage_info_v6 — complete, a strict superset of v4 (verified
+    against the SDK header by `python3 -m core.validate`).
+
+    Read for ri_energy_nj / ri_penergy_nj: the per-process energy ledger
+    that actually moves at polling cadence — measured 10/10 nonzero deltas
+    at 1 s where ri_billed_energy (V4) stays lazily folded and frozen
+    (casebook 0001.10). Never truncate this either (S9): the kernel writes
+    sizeof(rusage_info_v6) bytes for flavor 6, reserved tail included.
+    """
+    _fields_ = list(RUsageInfoV4._fields_) + [
+        ("ri_flags", ctypes.c_uint64),
+        ("ri_user_ptime", ctypes.c_uint64),
+        ("ri_system_ptime", ctypes.c_uint64),
+        ("ri_pinstructions", ctypes.c_uint64),
+        ("ri_pcycles", ctypes.c_uint64),
+        ("ri_energy_nj", ctypes.c_uint64),
+        ("ri_penergy_nj", ctypes.c_uint64),
+        ("ri_secure_time_in_system", ctypes.c_uint64),
+        ("ri_secure_ptime_in_system", ctypes.c_uint64),
+        ("ri_neural_footprint", ctypes.c_uint64),
+        ("ri_lifetime_max_neural_footprint", ctypes.c_uint64),
+        ("ri_interval_max_neural_footprint", ctypes.c_uint64),
+        ("ri_reserved", ctypes.c_uint64 * 9),
+    ]
+
+
+# 16-byte uuid + (35 + 12) x uint64 + 9 reserved uint64 = 464.
+assert ctypes.sizeof(RUsageInfoV6) == 464
+
+
 # ---------------------------------------------------------------------------
 # mach timebase — ticks -> nanoseconds (S2)
 # ---------------------------------------------------------------------------
@@ -158,14 +192,33 @@ def _raw_rusage(pid):
     return info
 
 
+def _raw_rusage_v6(pid):
+    """Raw RUsageInfoV6 for pid, or None on EPERM/ESRCH/flavor-unsupported."""
+    info = RUsageInfoV6()
+    rc = _libc.proc_pid_rusage(ctypes.c_int(pid), ctypes.c_int(RUSAGE_INFO_V6),
+                               ctypes.byref(info))
+    if rc != 0:
+        return None
+    return info
+
+
+# Flavor 6 availability, probed once against our own pid. Where absent
+# (older macOS), energy reads degrade to None and callers must render the
+# absence, never a zero (casebook 0001.11).
+HAS_V6 = _raw_rusage_v6(os.getpid()) is not None
+
+
 def rusage(pid):
     """Converted vitals-ready counters for pid, or None if inaccessible.
 
-    All time fields are seconds (timebase-converted); energy is nanojoules
-    as billed; sizes are bytes. start_time_epoch is Unix time derived from
-    ri_proc_start_abstime against mach_absolute_time now.
+    All time fields are seconds (timebase-converted); energy is nanojoules;
+    sizes are bytes. start_time_epoch is Unix time derived from
+    ri_proc_start_abstime against mach_absolute_time now. energy_nj is the
+    live flavor-6 ledger, None where flavor 6 is unavailable;
+    billed_energy_nj is kept for the slow cross-check tier only — its
+    deltas are frozen at polling cadence (casebook 0001.10).
     """
-    info = _raw_rusage(pid)
+    info = _raw_rusage_v6(pid) if HAS_V6 else _raw_rusage(pid)
     if info is None:
         return None
     now_ticks = mach_absolute_time()
@@ -178,6 +231,7 @@ def rusage(pid):
         "diskio_bytes_written": info.ri_diskio_byteswritten,
         "phys_footprint_bytes": info.ri_phys_footprint,
         "billed_energy_nj": info.ri_billed_energy,
+        "energy_nj": info.ri_energy_nj if HAS_V6 else None,
         "qos_time_s": {
             "default": _ticks_to_s(info.ri_cpu_time_qos_default),
             "maintenance": _ticks_to_s(info.ri_cpu_time_qos_maintenance),
@@ -193,6 +247,33 @@ def rusage(pid):
         "start_time_epoch": time.time()
                             - _ticks_to_s(now_ticks - info.ri_proc_start_abstime),
     }
+
+
+def proc_cpu_sample(pid):
+    """One cpu-scope poll: (identity, user_ns, system_ns, energy_nj) or None.
+
+    identity is (pid, ri_proc_start_abstime raw ticks) — the opaque
+    pid-reuse key (S10). user_ns / system_ns are timebase-converted
+    cumulative CPU time. energy_nj is the lifetime ri_energy_nj ledger
+    from flavor 6 — the energy field whose deltas move at polling cadence,
+    unlike ri_billed_energy (casebook 0001.10) — or None where flavor 6
+    is unavailable.
+    """
+    if HAS_V6:
+        info = _raw_rusage_v6(pid)
+        if info is None:
+            return None
+        return ((pid, info.ri_proc_start_abstime),
+                ticks_to_ns(info.ri_user_time),
+                ticks_to_ns(info.ri_system_time),
+                info.ri_energy_nj)
+    info = _raw_rusage(pid)
+    if info is None:
+        return None
+    return ((pid, info.ri_proc_start_abstime),
+            ticks_to_ns(info.ri_user_time),
+            ticks_to_ns(info.ri_system_time),
+            None)
 
 
 def proc_diskio(pid):

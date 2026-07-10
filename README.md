@@ -2,7 +2,7 @@
 
 **Vital signs for your Mac** — the sense of its own internal state.
 
-See exactly which process is hammering your disk, stalling on I/O, or refusing to let a drive eject — with more vitals (CPU, memory, battery, drive health) on the roadmap.
+See exactly which process is hammering your disk, stalling on I/O, refusing to let a drive eject — or burning your CPU, with live per-process power. More vitals (memory, battery, drive health) on the roadmap.
 
 ![stethoscope disk tui](assets/tui.svg)
 
@@ -31,6 +31,7 @@ sudo ./stethoscope disk inspect 12345           # why — live syscall trace of 
 ./stethoscope disk holds 12345                  # what files a process holds open
 sudo ./stethoscope disk busy "/Volumes/X9 Pro"  # which pids won't let it eject
 sudo -E ./stethoscope disk tui                  # full-screen interactive view
+sudo ./stethoscope cpu top                      # who is burning CPU right now
 ```
 
 ## The `disk` scope
@@ -69,6 +70,23 @@ One rule explains every ¹ above: **the kernel only shows a process's accounting
 
 Destructive actions (`x` kill, `e` eject) always ask for confirmation first.
 
+## The `cpu` scope
+
+```sh
+sudo ./stethoscope cpu top        # who is burning CPU right now
+```
+
+One live table, three time horizons per process — because "constantly hogging" is a claim about history, not just this second:
+
+| Column | Meaning |
+|---|---|
+| `%CPU` (+ `USER%`/`SYS%`) | share of one core this interval — the "right now" |
+| `POWER` | live watts from the kernel's per-process energy ledger (rusage flavor 6); `-` on macOS versions without it, never a fake zero |
+| `CPU TIME` | lifetime CPU consumed |
+| `DUTY%` | lifetime CPU over the process's *awake*-age — a daemon at 60% for two months shows a damning duty no matter when you look |
+
+Same sudo rule as `disk`: without root you see your own processes only.
+
 ## Scopes & roadmap
 
 Each subsystem is a **scope** — a command namespace backed by a reusable data layer. `disk` is the first organ stethoscope knows how to examine:
@@ -76,7 +94,8 @@ Each subsystem is a **scope** — a command namespace backed by a reusable data 
 | Scope | Status | What it examines |
 |---|---|---|
 | `disk` | **shipped** | per-process disk I/O, blocked syscalls, open-file holds, eject blockers |
-| `cpu` + `memory` | [v0.2](https://github.com/sauravvarma/stethoscope/milestone/1) | who's pegging cores, wakeups, footprint, leak candidates |
+| `cpu` | **shipped** (`cpu top`) | who's pegging cores right now — %CPU, live watts, lifetime CPU time and duty; wakeup vitals in [v0.2](https://github.com/sauravvarma/stethoscope/milestone/1) |
+| `memory` | [v0.2](https://github.com/sauravvarma/stethoscope/milestone/1) | footprint, leak candidates |
 | `battery` | [v0.3](https://github.com/sauravvarma/stethoscope/milestone/2) | per-process energy impact — what's draining you |
 | `smart` | [v0.4](https://github.com/sauravvarma/stethoscope/milestone/3) | SMART data, drive wear, external-drive life expectancy |
 
@@ -130,6 +149,7 @@ core/
 scopes/
   disk.py            disk scope: data layer + CLI commands (self-documenting header)
   disk_tui.py        disk scope: curses TUI over the same data layer
+  cpu.py             cpu scope: data layer + CLI commands (self-documenting header)
 ```
 
 **The design rule:** each scope is one module exposing a **data layer** — pure functions returning structures — with thin **presentation** on top. The CLI and the TUI render the *same* functions; agent-facing output (`--json`) and anomaly detection will build on the data layer, never on rendered text. Fix a number in one place, every surface updates.

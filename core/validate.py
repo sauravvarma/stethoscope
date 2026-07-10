@@ -52,19 +52,27 @@ def sdk_header_path():
     return path if os.path.isfile(path) else None
 
 
-def parse_header_v4(path):
-    """Field list of struct rusage_info_v4 straight from the SDK header."""
+def parse_header_struct(path, version):
+    """[(field_name, byte_size)] of struct rusage_info_vN from the SDK header."""
     with open(path) as f:
         text = f.read()
-    m = re.search(r"struct rusage_info_v4 \{(.*?)\};", text, re.S)
+    m = re.search(r"struct rusage_info_v%d \{(.*?)\};" % version, text, re.S)
     if not m:
         return None
     fields = []
     for ln in m.group(1).splitlines():
-        fm = re.match(r"\s*(uint8_t|uint64_t)\s+(\w+)(\[16\])?;", ln)
+        fm = re.match(r"\s*(uint8_t|uint64_t)\s+(\w+)(?:\[(\d+)\])?;", ln)
         if fm:
-            fields.append(fm.group(2))
+            unit = 1 if fm.group(1) == "uint8_t" else 8
+            count = int(fm.group(3) or 1)
+            fields.append((fm.group(2), unit * count))
     return fields
+
+
+def parse_header_v4(path):
+    """Field-name list of struct rusage_info_v4 straight from the SDK header."""
+    parsed = parse_header_struct(path, 4)
+    return [name for name, _ in parsed] if parsed is not None else None
 
 
 def signed64(v):
@@ -76,23 +84,34 @@ def signed64(v):
 # checks
 # ---------------------------------------------------------------------------
 
+def _check_struct_against_header(header, struct_cls, version, check_name):
+    parsed = parse_header_struct(header, version)
+    if parsed is None:
+        report("FAIL", check_name,
+               "could not parse rusage_info_v%d from %s" % (version, header))
+        return
+    ours = [name for name, _ in struct_cls._fields_]
+    theirs = [name for name, _ in parsed]
+    size = ctypes.sizeof(struct_cls)
+    expected = sum(nbytes for _, nbytes in parsed)
+    if ours == theirs and size == expected:
+        report("PASS", check_name,
+               "%d fields match SDK header, sizeof %d == %d" % (len(ours), size, expected))
+    else:
+        report("FAIL", check_name,
+               "header %d fields / %d B vs ours %d fields / %d B"
+               % (len(theirs), expected, len(ours), size))
+
+
 def check_struct():
     header = sdk_header_path()
-    ours = [name for name, _ in rusage.RUsageInfoV4._fields_]
-    size = ctypes.sizeof(rusage.RUsageInfoV4)
     if header:
-        theirs = parse_header_v4(header)
-        if theirs is None:
-            report("FAIL", "rusage struct", "could not parse rusage_info_v4 from %s" % header)
-            return
-        expected = 16 + (len(theirs) - 1) * 8   # uuid + N u64s
-        if ours == theirs and size == expected:
-            report("PASS", "rusage struct",
-                   "%d fields match SDK header, sizeof %d == %d" % (len(ours), size, expected))
+        _check_struct_against_header(header, rusage.RUsageInfoV4, 4, "rusage struct")
+        if rusage.HAS_V6:
+            _check_struct_against_header(header, rusage.RUsageInfoV6, 6, "rusage struct v6")
         else:
-            report("FAIL", "rusage struct",
-                   "header %d fields / %d B vs ours %d fields / %d B"
-                   % (len(theirs), expected, len(ours), size))
+            report("SKIP", "rusage struct v6",
+                   "flavor 6 unavailable on this OS — energy_nj degrades to None")
     else:
         # No CLT: settle for the syscall accepting our struct and the trailing
         # field looking like a real duration.
@@ -139,8 +158,11 @@ def check_timebase():
            % (n, d, wall, conv, raw, wall / raw if raw else 0))
 
 
-def check_billed_energy():
-    # Own pid plus the 3 busiest accessible pids by lifetime CPU.
+def check_energy_cadence():
+    # Own pid (kept genuinely busy by a burner thread) plus the 3 busiest
+    # accessible pids by lifetime CPU, sampled at 1 s for 10 s. Two verdicts
+    # from one window: ri_billed_energy (V4, known-lazy ledger, S1) and
+    # ri_energy_nj (V6, the live candidate — casebook 0001.10/0001.11).
     own = os.getpid()
     busy = []
     for pid in rusage.list_pids():
@@ -150,32 +172,58 @@ def check_billed_energy():
     busy.sort(reverse=True)
     pids = [own] + [p for _, p in busy[:3]]
 
-    samples = {p: [] for p in pids}
+    raw = rusage._raw_rusage_v6 if rusage.HAS_V6 else rusage._raw_rusage
+    fields = ["ri_billed_energy"] + (["ri_energy_nj"] if rusage.HAS_V6 else [])
+    samples = {p: {f: [] for f in fields} for p in pids}
     burner = threading.Thread(target=_burn, args=(10.0,), daemon=True)
-    burner.start()   # keep our own pid genuinely busy during the window
+    burner.start()
     for _ in range(11):
         for p in pids:
-            info = rusage._raw_rusage(p)
-            samples[p].append(info.ri_billed_energy if info else None)
+            info = raw(p)
+            for f in fields:
+                samples[p][f].append(getattr(info, f) if info else None)
         time.sleep(1.0)
-    moved = {}
-    for p in pids:
-        vals = [v for v in samples[p] if v is not None]
-        deltas = [b - a for a, b in zip(vals, vals[1:])]
-        moved[p] = (sum(1 for x in deltas if x != 0), len(deltas), vals[-1] if vals else 0)
-    detail = "  ".join("pid %d: %d/%d nonzero deltas (lifetime %d nJ)"
-                       % (p, m[0], m[1], m[2]) for p, m in moved.items())
-    any_moved = any(m[0] for m in moved.values())
-    report("INFO", "billed_energy cadence",
-           ("MOVES at 1 s: " if any_moved else "FROZEN at 1 s: ") + detail)
 
-    # Flavor 6 availability — oversized zeroed buffer, report rc only.
-    buf = ctypes.create_string_buffer(1024)
-    rc = rusage._libc.proc_pid_rusage(ctypes.c_int(own), ctypes.c_int(6),
-                                      ctypes.cast(buf, ctypes.c_void_p))
-    report("INFO", "rusage flavor 6",
-           "rc=%d (%s) — candidate for ri_energy_billed_to_me" %
-           (rc, "available" if rc == 0 else "unavailable"))
+    def label(p):
+        return "pid %d (%s)" % (p, rusage.proc_name(p) if p != own else "self, burning")
+
+    def moved(field):
+        out = {}
+        for p in pids:
+            vals = [v for v in samples[p][field] if v is not None]
+            deltas = [b - a for a, b in zip(vals, vals[1:])]
+            out[p] = (sum(1 for x in deltas if x != 0), len(deltas))
+        return out
+
+    billed = moved("ri_billed_energy")
+    detail = "  ".join("%s: %d/%d nonzero deltas" % (label(p), m[0], m[1])
+                       for p, m in billed.items())
+    if any(m[0] for m in billed.values()):
+        report("INFO", "billed_energy cadence", "MOVES at 1 s: " + detail)
+    else:
+        # Frozen means UNMEASURABLE at this cadence, not idle — a zero delta
+        # from this ledger must never be read as "process is quiet". The
+        # blind-agent review exonerated two 60%-CPU runaways off exactly
+        # that misreading (casebook 0005.2).
+        report("INFO", "billed_energy cadence",
+               "FROZEN at 1 s — unusable as a live activity signal; "
+               "frozen != idle (casebook 0001.10): " + detail)
+
+    if not rusage.HAS_V6:
+        report("SKIP", "energy_nj cadence",
+               "rusage flavor 6 unavailable — no live per-process energy on this OS")
+        return
+    live = moved("ri_energy_nj")
+    detail = "  ".join("%s: %d/%d nonzero deltas" % (label(p), m[0], m[1])
+                       for p, m in live.items())
+    own_nz, own_n = live[own]
+    if own_n and own_nz >= own_n - 2:
+        report("PASS", "energy_nj cadence",
+               "MOVES at 1 s — live per-process power source (casebook 0001.11): " + detail)
+    else:
+        report("INFO", "energy_nj cadence",
+               "did not track a full-core burn at 1 s — treat watts as unavailable "
+               "on this machine: " + detail)
 
 
 def check_wakeup_split():
@@ -276,7 +324,7 @@ def main():
     print()
     check_struct()
     check_timebase()
-    check_billed_energy()
+    check_energy_cadence()
     check_wakeup_split()
     check_battery()
     check_pmset_cost()

@@ -9,7 +9,8 @@ agents. Each subsystem is a "scope" — a namespace of commands backed by a
 reusable data layer in scopes/<name>.py.
 
   stethoscope disk <cmd>      per-process disk I/O, holds, eject blockers
-  (planned: cpu, memory, battery, smart — see the repo roadmap)
+  stethoscope cpu <cmd>       per-process CPU, live power, lifetime duty
+  (planned: memory, battery, smart — see the repo roadmap)
 
 No third-party dependencies — system Python 3 only.
 """
@@ -30,11 +31,15 @@ scopes:
             holds <pid>     what files a process holds open
             busy <volume>   which pids pin a disk ("why won't it eject")
             tui             full-screen interactive view (sudo -E)
+  cpu     per-process CPU visibility
+            top             who is burning CPU now (default) — %CPU, live
+                            watts, lifetime CPU time and duty
 
-planned scopes: cpu, memory, battery, smart  (see roadmap)
+planned scopes: memory, battery, smart  (see roadmap)
 
 examples:
   sudo ./stethoscope disk top
+  sudo ./stethoscope cpu top
   sudo ./stethoscope disk busy "/Volumes/X9 Pro"
   sudo -E ./stethoscope disk tui
 """
@@ -55,6 +60,10 @@ def main(argv):
         from scopes import disk
         # disk.main expects [prog, mode, ...]; rebrand prog for its messages
         return disk.main(["stethoscope disk"] + args)
+
+    if scope == "cpu":
+        from scopes import cpu
+        return cpu.main(["stethoscope cpu"] + args)
 
     sys.stderr.write("unknown scope: %s\n\n%s" % (scope, USAGE))
     return 2
