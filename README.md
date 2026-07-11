@@ -32,6 +32,9 @@ sudo ./stethoscope disk inspect 12345           # why — live syscall trace of 
 sudo ./stethoscope disk busy "/Volumes/X9 Pro"  # which pids won't let it eject
 sudo -E ./stethoscope disk tui                  # full-screen interactive view
 sudo ./stethoscope cpu top                      # who is burning CPU right now
+./stethoscope record --once                     # append one 60s vitals interval
+./stethoscope history cpu --since 3am           # retrospective CPU summary
+./stethoscope history baseline battery          # hourly contextual percentiles
 ```
 
 ## The `disk` scope

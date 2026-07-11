@@ -17,8 +17,8 @@ class OptionsError(ValueError):
 
 
 class Options:
-    __slots__ = ("json", "once", "duration", "interval", "limit", "rest",
-                 "provided")
+    __slots__ = ("json", "once", "duration", "interval", "limit", "store",
+                 "since", "retention_days", "rest", "provided")
 
     def __init__(self, interval=1.0, limit=20):
         self.json = False
@@ -26,6 +26,9 @@ class Options:
         self.duration = None
         self.interval = interval
         self.limit = limit
+        self.store = None
+        self.since = None
+        self.retention_days = 30
         self.rest = []
         self.provided = set()
 
@@ -43,9 +46,10 @@ def _number(args, index, name, cast):
     return value
 
 
-def parse_options(args, interval=1.0, limit=20):
+def parse_options(args, interval=1.0, limit=20, extras=()):
     """Parse common surface flags and preserve positional arguments."""
     options = Options(interval=interval, limit=limit)
+    extras = set(extras)
     index = 0
     while index < len(args):
         arg = args[index]
@@ -67,6 +71,20 @@ def parse_options(args, interval=1.0, limit=20):
             options.limit = _number(args, index, arg, int)
             options.provided.add("limit")
             index += 1
+        elif (arg in ("--store", "--since")
+              and arg[2:].replace("-", "_") in extras):
+            if index + 1 >= len(args):
+                raise OptionsError("%s needs a value" % arg)
+            value = args[index + 1]
+            if not value or value.startswith("-"):
+                raise OptionsError("%s needs a value" % arg)
+            setattr(options, arg[2:].replace("-", "_"), value)
+            options.provided.add(arg[2:].replace("-", "_"))
+            index += 1
+        elif arg == "--retention-days" and "retention_days" in extras:
+            options.retention_days = _number(args, index, arg, int)
+            options.provided.add("retention_days")
+            index += 1
         elif arg.startswith("-") and arg != "-":
             raise OptionsError("unknown option: %s" % arg)
         else:
@@ -79,6 +97,8 @@ def parse_options(args, interval=1.0, limit=20):
         raise OptionsError("--limit must be > 0")
     if options.duration is not None and options.duration <= 0:
         raise OptionsError("--duration must be > 0")
+    if options.retention_days <= 0:
+        raise OptionsError("--retention-days must be > 0")
     return options
 
 

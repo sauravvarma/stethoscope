@@ -13,6 +13,8 @@ reusable data layer in scopes/<name>.py.
   stethoscope memory <cmd>    footprint, pressure, leak candidates
   stethoscope battery <cmd>   health, energy attribution, unplug drainers
   stethoscope smart [disk]    drive health, wear, pre-failure warnings
+  stethoscope record          append live vitals to a local JSONL corpus
+  stethoscope history [scope] summarize recorded vitals and baselines
 
 No third-party dependencies — system Python 3 only.
 """
@@ -50,6 +52,9 @@ scopes:
             inspect         richer powermetrics detail (sudo)
   smart   physical-drive health and endurance
             status [disk]   SMART verdict, wear, life, and warnings
+  record  foreground sampler (launchd-friendly; default interval 60s)
+  history [scope] [--since WHEN]
+          retrospective summary; use "history baseline [scope]" for percentiles
 
 examples:
   sudo ./stethoscope disk top
@@ -67,6 +72,8 @@ SCOPES = {
     "memory": {"module": "scopes.memory"},
     "battery": {"module": "scopes.battery"},
     "smart": {"module": "scopes.smart"},
+    "record": {"module": "scopes.record"},
+    "history": {"module": "scopes.record"},
 }
 
 

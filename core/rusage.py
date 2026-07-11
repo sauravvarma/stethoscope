@@ -313,7 +313,8 @@ def proc_power_sample(pid):
     ledger (case 0001.10/0001.11) or None where flavor 6 is unavailable —
     never a fabricated zero; "pkg_idle_wakeups" / "interrupt_wakeups" are
     the two counters kept apart (S8, casebook 0004); "diskio_bytes_read" /
-    "diskio_bytes_written" are cumulative bytes; "qos_cpu_ns" retains the
+    "diskio_bytes_written" are cumulative bytes; footprint/resident are the
+    current byte gauges from the same struct; "qos_cpu_ns" retains the
     seven cumulative CPU ledgers needed by pmenergy's QoS-specific weights.
     """
     info = _raw_rusage_v6(pid) if HAS_V6 else _raw_rusage(pid)
@@ -339,6 +340,8 @@ def proc_power_sample(pid):
         "interrupt_wakeups": info.ri_interrupt_wkups,
         "diskio_bytes_read": info.ri_diskio_bytesread,
         "diskio_bytes_written": info.ri_diskio_byteswritten,
+        "phys_footprint_bytes": info.ri_phys_footprint,
+        "resident_size_bytes": info.ri_resident_size,
     }
 
 

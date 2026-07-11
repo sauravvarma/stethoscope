@@ -490,7 +490,124 @@ or warning, `0` when no finding is present, and `2` for an unknown requested
 disk or malformed invocation.
 As a static command, SMART supports `--json` but rejects sampling flags.
 
+## Recording corpus: `baseline-raw/1`
+
+`stethoscope record` appends strict JSON objects (not `stethoscope/1`
+envelopes) to local-date `YYYY-MM-DD.jsonl` files. One complete object occupies
+one line. Files are append-only and retained for 30 days by default.
+
+```json
+{
+  "schema": "baseline-raw/1",
+  "recorded_at": 1783765800.0,
+  "interval_s": 60.02,
+  "requested_interval_s": 60.0,
+  "context": {
+    "root": false,
+    "privilege": "user",
+    "power_state": "battery",
+    "local_hour": 15,
+    "timezone": "IST+05:30",
+    "sampler": {
+      "pid": 123,
+      "start_ticks": 456,
+      "name": "python3",
+      "normalized_name": "python3"
+    },
+    "coverage": {
+      "new_processes_zero_based": 1,
+      "unmatched_current_processes": 0,
+      "missing_endpoint_processes": 2
+    }
+  },
+  "metrics": [
+    {"scope": "cpu", "metric": "cpu_pct", "value": 42.0,
+     "unit": "percent_of_one_core"},
+    {"scope": "sampler", "metric": "footprint_bytes", "value": 9535488,
+     "unit": "bytes"}
+  ],
+  "processes": [
+    {
+      "pid": 500, "start_ticks": 900, "name": "worker",
+      "normalized_name": "worker",
+      "cpu_pct": 12.0, "user_pct": 10.0, "system_pct": 2.0,
+      "pkg_idle_wakeups_per_s": 1.0,
+      "interrupt_wakeups_per_s": 20.0,
+      "diskio_bytes_read_per_s": 0.0,
+      "diskio_bytes_written_per_s": 4096.0,
+      "energy_rate_watts": null, "energy_score_per_s": 0.4,
+      "footprint_bytes": 104857600, "resident_size_bytes": 110100480
+    }
+  ],
+  "partial": true,
+  "partial_reasons": ["not_root", "process_endpoint_gaps"]
+}
+```
+
+Stable system metrics cover CPU, both wakeup counters, disk read/write,
+memory used/free/wired/compressed, battery charge/health/flow, real energy
+where available, unitless energy score, and sampler CPU/footprint/resident.
+Nullable values remain present. Processes are the union of active top-N and
+footprint top-N plus the sampler, keyed by PID/start identity.
+`context.power_state` is normalized to `ac`, `battery`, or `unknown`.
+Rates, counters, percentages, and byte gauges must be nonnegative; battery
+flow is the signed exception (negative while discharging).
+Processes proven by their start tick to have begun within an interval are
+zero-based so their work is retained. Endpoint misses are counted in
+`context.coverage`; either an older current-only process or a process missing
+from the second endpoint adds `process_endpoint_gaps` rather than silently
+claiming complete attribution. Snapshot timing uses equivalent scan midpoints.
+
+## `record`
+
+`record --json` emits one `stethoscope/1` `record/sample` document per
+successfully appended interval, derived from the same raw sample. Flags:
+`--json`, `--once`, `--duration N`, `--interval N`, `--limit N`,
+`--store DIR`, and `--retention-days N`. Defaults are 60 seconds, 20 rows per
+top-N set, and 30 days. `--once` always completes exactly one requested
+interval.
+`--limit` is capped at 256, `--interval` at one day, explicit `--duration` at
+365 days, and retention at 3650 days; out-of-range values are usage errors.
+
+Record documents always include `stored`, `recorded_at`, `interval_s`,
+`requested_interval_s`, `context`, `metrics`, `processes`, and `error`.
+`stored` remains true when an append succeeded but a later retention or output
+step failed. A daily file with an incomplete final line blocks further appends
+to that file and returns exit 4 rather than concatenating two JSON objects.
+
+## `history [scope]` and `history baseline [scope]`
+
+History flags are `--since WHEN`, `--limit N`, `--store DIR`, and `--json`;
+`WHEN` accepts relative durations (`3h`), ISO-8601 timestamps, and local clock
+times (`3am`). The optional scope is actually applied and unknown/extra
+positionals are rejected.
+
+Summary documents use command `summary` and contain `record_count`, `cold`,
+`summaries`, and `top_consumers`. Baseline documents use command `baseline`
+and contain contextual `buckets`. Percentile rows expose exact `count`,
+bounded `sample_count`, `p50`, `p90`, and `p99`. Baseline buckets additionally
+carry local hour, timezone, privilege, power state, scope, metric, normalized
+process name (or `null` for system metrics), and `cold`.
+History scans files incrementally; only bounded per-bucket reservoirs and
+result metadata are retained in memory. `--limit` is applied independently to
+each process metric (and, for contextual baselines, each context/metric), so
+byte-valued metrics never displace CPU, wakeup, or energy rows.
+Candidate cardinality is bounded as well. If churn exceeds those bounds,
+`dropped_values` is nonzero, `history_bucket_limit` appears in
+`partial_reasons`, and the command still exits 0 because the retained summary
+is usable.
+
+Replay counts every bad line diagnostic in `replay_error_count` and retains up
+to 1024 details in `replay_errors`, each with `file`, `line`, and `reason`;
+`replay_errors_omitted` gives the exact remainder. Malformed, invalid,
+non-finite, overlong, deeply nested, or partial-final-line input sets
+`partial: true`, includes `corrupt_store`, and exits 4. Source samples' own
+partial reasons are also retained, but visibility limitations alone do not
+turn a usable history summary into exit 4. Missing/empty stores are clean,
+cold, and exit 0.
+
 ## Changelog
 
-- `stethoscope/1`: stable common envelope and disk/CPU/memory/battery/SMART
-  contracts.
+- `stethoscope/1`: stable common envelope and
+  disk/CPU/memory/battery/SMART/record/history contracts.
+- `baseline-raw/1`: append-only daily recording corpus.
