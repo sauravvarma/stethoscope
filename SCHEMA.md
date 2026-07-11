@@ -180,6 +180,73 @@ the total exists only as a view/ranking convenience.
 with a fabricated zero. `%CPU` can exceed 100 for a multi-core process. Exit
 code: `0`; malformed invocations return `2`.
 
+## `memory top`
+
+```json
+{
+  "schema": "stethoscope/1",
+  "scope": "memory",
+  "command": "top",
+  "partial": false,
+  "partial_reasons": [],
+  "system": {
+    "available": true,
+    "errors": [],
+    "total": 17179869184,
+    "used": 11274289152,
+    "free": 732954624,
+    "active": 5046586572,
+    "inactive": 2147483648,
+    "wired": 3221225472,
+    "compressed": 3006477108,
+    "pressure": "normal"
+  },
+  "processes": [
+    {
+      "pid": 1234,
+      "name": "WindowServer",
+      "footprint_bytes": 734003200,
+      "resident_size_bytes": 812345344
+    }
+  ]
+}
+```
+
+System-memory probe failures set affected byte fields to `null`, add stable
+codes to `system.errors`, set `system.available` false, and mark the document
+partial with reason `system_memory_probe`. `pressure` is `normal`, `warn`,
+`critical`, or `unknown`; unknown is never equivalent to healthy. Exit code:
+`0`; malformed invocations return `2`.
+
+## `memory watch <pid>`
+
+Each sample contains:
+
+```json
+{
+  "schema": "stethoscope/1",
+  "scope": "memory",
+  "command": "watch",
+  "partial": false,
+  "partial_reasons": [],
+  "pid": 1234,
+  "name": "worker",
+  "running": true,
+  "footprint_bytes": 268435456,
+  "resident_size_bytes": 301989888,
+  "slope_mb_per_min": 4.2,
+  "plateaued": false,
+  "leak_candidate": true,
+  "samples": 12
+}
+```
+
+`leak_candidate` latches once sustained positive growth without a plateau is
+observed. If the process exits or its PID is reused, one final document has
+`running: false` and nullable footprint/resident/slope/plateau fields. Exit is
+`1` when the run latched a leak candidate, `0` otherwise, `2` for a missing
+PID, and `3` when the process exists but is inaccessible.
+
 ## Changelog
 
-- `stethoscope/1`: stable common envelope and disk/CPU contracts.
+- `stethoscope/1`: stable common envelope and disk/CPU/memory contracts.

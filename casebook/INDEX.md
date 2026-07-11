@@ -10,3 +10,4 @@
 | [0004](0004-wakeup-alarm-signal.md) | which wakeup counter alarms wakeup-storm | treated | 2026-07-10 | 2026-07-11 | 8 |
 | [0005](0005-cpu-scope.md) | cpu scope — who is burning CPU now | treated | 2026-07-10 | 2026-07-11 | 9 |
 | [0006](0006-agent-contract.md) | stable agent command contract | treated | 2026-07-11 | 2026-07-11 | 5 |
+| [0007](0007-memory-scope.md) | memory scope — footprint ranking + leak watch | treated | 2026-07-11 | 2026-07-11 | 7 |
