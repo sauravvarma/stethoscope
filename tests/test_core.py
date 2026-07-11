@@ -183,7 +183,8 @@ class TestRankIO(unittest.TestCase):
 class TestCpuSample(unittest.TestCase):
     def test_identity_matches_proc_identity(self):
         pid = os.getpid()
-        identity, user_ns, system_ns, energy_nj = rusage.proc_cpu_sample(pid)
+        (identity, user_ns, system_ns, energy_nj, pkg_wkups,
+         intr_wkups) = rusage.proc_cpu_sample(pid)
         self.assertEqual(identity, rusage.proc_identity(pid))
         self.assertGreater(user_ns, 0)
         self.assertGreaterEqual(system_ns, 0)
@@ -191,17 +192,20 @@ class TestCpuSample(unittest.TestCase):
             self.assertIsInstance(energy_nj, int)
         else:
             self.assertIsNone(energy_nj)
+        # Cumulative counters, never negative (S8: kept apart, never summed).
+        self.assertGreaterEqual(pkg_wkups, 0)
+        self.assertGreaterEqual(intr_wkups, 0)
 
     def test_burn_tracks_wall_clock(self):
         # slow (~0.3 s): the S2 regression on the cpu-scope path — the
         # sample's converted delta must track wall clock, not raw ticks.
         pid = os.getpid()
-        _, u0, s0, _ = rusage.proc_cpu_sample(pid)
+        _, u0, s0, _, _, _ = rusage.proc_cpu_sample(pid)
         t0 = time.perf_counter()
         while time.perf_counter() - t0 < 0.3:
             pass
         wall = time.perf_counter() - t0
-        _, u1, s1, _ = rusage.proc_cpu_sample(pid)
+        _, u1, s1, _, _, _ = rusage.proc_cpu_sample(pid)
         delta_s = (u1 + s1 - u0 - s0) / 1e9
         self.assertLess(abs(delta_s - wall) / wall, 0.30)
 
@@ -211,61 +215,85 @@ class TestCpuSample(unittest.TestCase):
 
 class TestRankCPU(unittest.TestCase):
     def test_rates_and_exclusions(self):
-        # pid 10 burned 1 s of CPU (0.6 user / 0.4 sys) and 2 J over 2 s.
-        prev = {(10, 111): (1_000_000_000, 500_000_000, 1_000_000_000),
-                (20, 222): (7_000_000_000, 0, 5_000_000_000)}
-        cur = {(10, 111): (1_600_000_000, 900_000_000, 3_000_000_000),
-               (20, 222): (7_000_000_000, 0, 5_000_000_000)}
-        rows, sys_cpu, sys_watts = cpu_scope.rank_cpu(prev, cur, 2.0)
+        # pid 10 burned 1 s of CPU (0.6 user / 0.4 sys) and 2 J over 2 s,
+        # plus 20 pkg-idle and 200 interrupt wakeups (10/s and 100/s).
+        prev = {(10, 111): (1_000_000_000, 500_000_000, 1_000_000_000, 100, 1000),
+                (20, 222): (7_000_000_000, 0, 5_000_000_000, 5, 5)}
+        cur = {(10, 111): (1_600_000_000, 900_000_000, 3_000_000_000, 120, 1200),
+               (20, 222): (7_000_000_000, 0, 5_000_000_000, 5, 5)}
+        rows, sys_totals = cpu_scope.rank_cpu(prev, cur, 2.0)
         # Only pid 10 was active; idle processes are excluded from rows.
         self.assertEqual(len(rows), 1)
-        cpu_pct, u_pct, s_pct, watts, total_ns, start, pid, _name = rows[0]
-        self.assertEqual(pid, 10)
-        self.assertEqual(start, 111)
-        self.assertAlmostEqual(cpu_pct, 50.0)
-        self.assertAlmostEqual(u_pct, 30.0)
-        self.assertAlmostEqual(s_pct, 20.0)
-        self.assertAlmostEqual(watts, 1.0)
-        self.assertEqual(total_ns, 2_500_000_000)
-        self.assertAlmostEqual(sys_cpu, 50.0)
-        self.assertAlmostEqual(sys_watts, 1.0)
+        row = rows[0]
+        self.assertEqual(row.pid, 10)
+        self.assertEqual(row.start_ticks, 111)
+        self.assertAlmostEqual(row.cpu_pct, 50.0)
+        self.assertAlmostEqual(row.user_pct, 30.0)
+        self.assertAlmostEqual(row.system_pct, 20.0)
+        self.assertAlmostEqual(row.watts, 1.0)
+        self.assertEqual(row.total_cpu_ns, 2_500_000_000)
+        self.assertAlmostEqual(row.pkg_wakeups_per_s, 10.0)
+        self.assertAlmostEqual(row.interrupt_wakeups_per_s, 100.0)
+        self.assertAlmostEqual(row.total_wakeups_per_s, 110.0)
+        self.assertAlmostEqual(sys_totals.cpu_pct, 50.0)
+        self.assertAlmostEqual(sys_totals.watts, 1.0)
+        self.assertAlmostEqual(sys_totals.pkg_wakeups_per_s, 10.0)
+        self.assertAlmostEqual(sys_totals.interrupt_wakeups_per_s, 100.0)
+        self.assertAlmostEqual(sys_totals.total_wakeups_per_s, 110.0)
 
     def test_no_energy_ledger_yields_none_watts(self):
-        prev = {(10, 111): (0, 0, None)}
-        cur = {(10, 111): (1_000_000_000, 0, None)}
-        rows, sys_cpu, sys_watts = cpu_scope.rank_cpu(prev, cur, 1.0)
-        self.assertIsNone(rows[0][3])
-        self.assertIsNone(sys_watts)
-        self.assertAlmostEqual(sys_cpu, 100.0)
+        prev = {(10, 111): (0, 0, None, 0, 0)}
+        cur = {(10, 111): (1_000_000_000, 0, None, 0, 0)}
+        rows, sys_totals = cpu_scope.rank_cpu(prev, cur, 1.0)
+        self.assertIsNone(rows[0].watts)
+        self.assertIsNone(sys_totals.watts)
+        self.assertAlmostEqual(sys_totals.cpu_pct, 100.0)
 
     def test_negative_delta_clamped(self):
-        prev = {(10, 111): (5_000_000_000, 0, 100)}
-        cur = {(10, 111): (4_000_000_000, 1_000_000_000, 50)}
-        rows, sys_cpu, sys_watts = cpu_scope.rank_cpu(prev, cur, 1.0)
-        self.assertAlmostEqual(rows[0][1], 0.0)     # user rate clamped
-        self.assertAlmostEqual(rows[0][2], 100.0)   # system rate honest
-        self.assertAlmostEqual(sys_watts, 0.0)      # energy clamped too
+        prev = {(10, 111): (5_000_000_000, 0, 100, 50, 50)}
+        cur = {(10, 111): (4_000_000_000, 1_000_000_000, 50, 40, 60)}
+        rows, sys_totals = cpu_scope.rank_cpu(prev, cur, 1.0)
+        self.assertAlmostEqual(rows[0].user_pct, 0.0)     # user rate clamped
+        self.assertAlmostEqual(rows[0].system_pct, 100.0)  # system rate honest
+        self.assertAlmostEqual(rows[0].pkg_wakeups_per_s, 0.0)  # clamped too
+        self.assertAlmostEqual(rows[0].interrupt_wakeups_per_s, 10.0)  # honest
+        self.assertAlmostEqual(sys_totals.watts, 0.0)      # energy clamped too
 
     def test_new_process_baselined_to_zero(self):
-        rows, sys_cpu, sys_watts = cpu_scope.rank_cpu(
-            {}, {(10, 111): (1_000_000_000, 0, 500)}, 1.0)
+        rows, sys_totals = cpu_scope.rank_cpu(
+            {}, {(10, 111): (1_000_000_000, 0, 500, 10, 10)}, 1.0)
         self.assertEqual(rows, [])
-        self.assertAlmostEqual(sys_cpu, 0.0)
+        self.assertAlmostEqual(sys_totals.cpu_pct, 0.0)
+        self.assertAlmostEqual(sys_totals.total_wakeups_per_s, 0.0)
 
     def test_pid_reuse_is_a_new_identity(self):
         # Same pid, new start_abstime: the huge counter of the dead process
         # must not be inherited as a rate spike (S10).
-        prev = {(10, 111): (10 ** 15, 0, 0)}
-        cur = {(10, 999): (4096, 0, 0)}
-        rows, sys_cpu, _ = cpu_scope.rank_cpu(prev, cur, 1.0)
+        prev = {(10, 111): (10 ** 15, 0, 0, 10 ** 9, 10 ** 9)}
+        cur = {(10, 999): (4096, 0, 0, 4, 4)}
+        rows, sys_totals = cpu_scope.rank_cpu(prev, cur, 1.0)
         self.assertEqual(rows, [])
-        self.assertAlmostEqual(sys_cpu, 0.0)
+        self.assertAlmostEqual(sys_totals.cpu_pct, 0.0)
+        self.assertAlmostEqual(sys_totals.total_wakeups_per_s, 0.0)
 
     def test_zero_dt_defaults_to_one_second(self):
-        prev = {(10, 111): (0, 0, None)}
-        cur = {(10, 111): (500_000_000, 0, None)}
-        rows, _, _ = cpu_scope.rank_cpu(prev, cur, 0)
-        self.assertAlmostEqual(rows[0][0], 50.0)
+        prev = {(10, 111): (0, 0, None, 0, 0)}
+        cur = {(10, 111): (500_000_000, 0, None, 30, 0)}
+        rows, _ = cpu_scope.rank_cpu(prev, cur, 0)
+        self.assertAlmostEqual(rows[0].cpu_pct, 50.0)
+        self.assertAlmostEqual(rows[0].pkg_wakeups_per_s, 30.0)
+
+    def test_wakeups_are_kept_separate_never_summed_into_one_field(self):
+        # S8 / casebook 0004: a sleep-loop-storm shape — near-zero pkg-idle,
+        # heavy interrupt — must remain two distinct row fields.
+        prev = {(10, 111): (0, 0, None, 1, 0)}
+        cur = {(10, 111): (0, 0, None, 1, 800)}
+        rows, sys_totals = cpu_scope.rank_cpu(prev, cur, 1.0)
+        self.assertAlmostEqual(rows[0].pkg_wakeups_per_s, 0.0)
+        self.assertAlmostEqual(rows[0].interrupt_wakeups_per_s, 800.0)
+        self.assertAlmostEqual(rows[0].total_wakeups_per_s, 800.0)
+        self.assertAlmostEqual(sys_totals.pkg_wakeups_per_s, 0.0)
+        self.assertAlmostEqual(sys_totals.interrupt_wakeups_per_s, 800.0)
 
     def test_lifetime_duty(self):
         # 1 s of CPU over 4 s awake (in tick units the converter maps 1:1

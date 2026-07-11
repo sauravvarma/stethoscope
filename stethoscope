@@ -37,6 +37,7 @@ scopes:
   cpu     per-process CPU visibility
             top             who is burning CPU now (default) — %CPU, live
                             watts, lifetime CPU time and duty
+            wakeups         who is waking the CPU (pkg-idle and interrupts)
 
 planned scopes: memory, battery, smart  (see roadmap)
 

@@ -250,14 +250,20 @@ def rusage(pid):
 
 
 def proc_cpu_sample(pid):
-    """One cpu-scope poll: (identity, user_ns, system_ns, energy_nj) or None.
+    """One cpu-scope poll: (identity, user_ns, system_ns, energy_nj,
+    pkg_idle_wakeups, interrupt_wakeups) or None.
 
     identity is (pid, ri_proc_start_abstime raw ticks) — the opaque
     pid-reuse key (S10). user_ns / system_ns are timebase-converted
     cumulative CPU time. energy_nj is the lifetime ri_energy_nj ledger
     from flavor 6 — the energy field whose deltas move at polling cadence,
     unlike ri_billed_energy (casebook 0001.10) — or None where flavor 6
-    is unavailable.
+    is unavailable. pkg_idle_wakeups / interrupt_wakeups are the cumulative
+    ri_pkg_idle_wkups / ri_interrupt_wkups counters — two distinct vitals
+    that are never summed here (S8, casebook 0004): a canonical sleep-loop
+    storm measures zero pkg-idle wakeups while holding ~800 interrupt
+    wakeups/s, so callers must diff and keep them apart, not fold them into
+    one number before a baseline-relative detector ever sees them.
     """
     if HAS_V6:
         info = _raw_rusage_v6(pid)
@@ -266,14 +272,18 @@ def proc_cpu_sample(pid):
         return ((pid, info.ri_proc_start_abstime),
                 ticks_to_ns(info.ri_user_time),
                 ticks_to_ns(info.ri_system_time),
-                info.ri_energy_nj)
+                info.ri_energy_nj,
+                info.ri_pkg_idle_wkups,
+                info.ri_interrupt_wkups)
     info = _raw_rusage(pid)
     if info is None:
         return None
     return ((pid, info.ri_proc_start_abstime),
             ticks_to_ns(info.ri_user_time),
             ticks_to_ns(info.ri_system_time),
-            None)
+            None,
+            info.ri_pkg_idle_wkups,
+            info.ri_interrupt_wkups)
 
 
 def proc_diskio(pid):

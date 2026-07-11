@@ -7,6 +7,6 @@
 | [0001](0001-energy-attribution.md) | per-process energy attribution | treated | 2026-07-10 | 2026-07-10 | 11 |
 | [0002](0002-statistical-calibration.md) | statistical evidence and calibration | treated | 2026-07-10 | 2026-07-10 | 9 |
 | [0003](0003-rusage-probe-contract.md) | the rusage probe contract | treated | 2026-07-10 | 2026-07-11 | 8 |
-| [0004](0004-wakeup-alarm-signal.md) | which wakeup counter alarms wakeup-storm | treated | 2026-07-10 | 2026-07-10 | 7 |
-| [0005](0005-cpu-scope.md) | cpu scope — who is burning CPU now | treated | 2026-07-10 | 2026-07-10 | 8 |
+| [0004](0004-wakeup-alarm-signal.md) | which wakeup counter alarms wakeup-storm | treated | 2026-07-10 | 2026-07-11 | 8 |
+| [0005](0005-cpu-scope.md) | cpu scope — who is burning CPU now | treated | 2026-07-10 | 2026-07-11 | 9 |
 | [0006](0006-agent-contract.md) | stable agent command contract | treated | 2026-07-11 | 2026-07-11 | 5 |

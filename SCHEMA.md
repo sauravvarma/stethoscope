@@ -136,6 +136,50 @@ holders exist and `0` when clean.
 `inspect` is a human-only live `fs_usage` trace. Agent/sampling flags are
 rejected with exit `2`; missing root permission returns exit `3`.
 
+## `cpu top` and `cpu wakeups`
+
+Both commands emit the same shape. `top` orders `processes` by `cpu_pct`;
+`wakeups` orders by `total_wakeups_per_s`. The two kernel wakeup counters
+remain separate fields because diagnosis compares each with its own baseline;
+the total exists only as a view/ranking convenience.
+
+```json
+{
+  "schema": "stethoscope/1",
+  "scope": "cpu",
+  "command": "wakeups",
+  "partial": true,
+  "partial_reasons": ["not_root"],
+  "system": {
+    "cpu_pct": 143.9,
+    "watts": 4.8,
+    "pkg_idle_wakeups_per_s": 2.0,
+    "interrupt_wakeups_per_s": 812.0,
+    "total_wakeups_per_s": 814.0,
+    "ncpu": 8
+  },
+  "processes": [
+    {
+      "pid": 29641,
+      "name": "worker",
+      "cpu_pct": 93.9,
+      "user_pct": 90.0,
+      "system_pct": 3.9,
+      "watts": 3.2,
+      "total_cpu_seconds": 120.5,
+      "lifetime_duty_pct": 71.2,
+      "pkg_idle_wakeups_per_s": 1.0,
+      "interrupt_wakeups_per_s": 400.0,
+      "total_wakeups_per_s": 401.0
+    }
+  ]
+}
+```
+
+`watts` is `null` where rusage flavor 6 is unavailable; it is never replaced
+with a fabricated zero. `%CPU` can exceed 100 for a multi-core process. Exit
+code: `0`; malformed invocations return `2`.
+
 ## Changelog
 
-- `stethoscope/1`: initial stable disk contract and common envelope.
+- `stethoscope/1`: stable common envelope and disk/CPU contracts.
