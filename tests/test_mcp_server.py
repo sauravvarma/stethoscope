@@ -433,13 +433,24 @@ class TestTransport(unittest.TestCase):
         self.assertEqual(responses[1]["error"]["code"], mcp.INVALID_REQUEST)
 
     def test_deeply_nested_json_is_parse_error_and_recovers(self):
-        nested = "[" * 2000 + "]" * 2000
+        nested = (
+            "[" * (mcp.MAX_JSON_DEPTH + 1)
+            + "]" * (mcp.MAX_JSON_DEPTH + 1))
         source = io.StringIO(nested + "\n{}\n")
         output = io.StringIO()
         mcp.serve(source, output)
         responses = [json.loads(line) for line in output.getvalue().splitlines()]
         self.assertEqual(responses[0]["error"]["code"], mcp.PARSE_ERROR)
         self.assertEqual(responses[1]["error"]["code"], mcp.INVALID_REQUEST)
+
+    def test_json_depth_bound_is_explicit_and_version_independent(self):
+        accepted = "[" * mcp.MAX_JSON_DEPTH + "]" * mcp.MAX_JSON_DEPTH
+        rejected = (
+            "[" * (mcp.MAX_JSON_DEPTH + 1)
+            + "]" * (mcp.MAX_JSON_DEPTH + 1))
+        self.assertIsInstance(mcp._strict_loads(accepted), list)
+        with self.assertRaisesRegex(ValueError, "nesting"):
+            mcp._strict_loads(rejected)
 
     def test_oversized_integer_is_rejected_before_conversion_and_recovers(self):
         oversized = (

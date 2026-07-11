@@ -95,3 +95,15 @@ The per-process `disk_holds` path also still used unbounded `capture_output`
 after volume-wide `disk_busy` had moved to the bounded runner. Every MCP-exposed
 `lsof` invocation now shares the same output and deadline limits, with overflow
 or timeout returned as the normal stable disk error document.
+
+## 0013.9 · 2026-07-11 · failure — parser recursion varied across Python builds
+
+The release CI runner's Python 3.14 JSON parser accepted a 2000-container
+document that system Python 3.9 rejected with `RecursionError`. The same input
+therefore produced invalid request `-32600` in CI but parse error `-32700`
+locally, making the protocol contract depend on interpreter implementation.
+
+Strict loading now performs an iterative, version-independent 64-container depth
+check after decoding. Inputs beyond that ceiling are recoverable parse errors,
+and boundary tests exercise both the accepted limit and the first rejected
+depth without relying on the interpreter recursion limit.

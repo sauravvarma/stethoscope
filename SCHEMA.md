@@ -88,12 +88,12 @@ silent, including recognized notifications whose object parameters fail
 method-level validation. A malformed no-ID envelope is an invalid request, not a
 notification, and receives `-32600`.
 
-The concrete transport ceilings are 1 MiB per input line, 4 MiB per structured
-tool document, 256 tool calls, and 4096 unique request IDs per server process;
-string IDs are at most 256 UTF-8 bytes. The disk mount/lsof probes used by
-`disk_busy` have a 15-second deadline and a 4 MiB combined output ceiling.
-Exceeding a native-probe bound remains a structured exit-4 tool result rather
-than terminating the MCP session.
+The concrete transport ceilings are 1 MiB per input line, 64 nested JSON
+containers, 4 MiB per structured tool document, 256 tool calls, and 4096 unique
+request IDs per server process; string IDs are at most 256 UTF-8 bytes. The disk
+mount/lsof probes used by `disk_busy` have a 15-second deadline and a 4 MiB
+combined output ceiling. Exceeding a native-probe bound remains a structured
+exit-4 tool result rather than terminating the MCP session.
 
 Integer request IDs are restricted to signed 64-bit values, and incoming JSON
 numeric tokens are rejected before conversion when their textual form exceeds

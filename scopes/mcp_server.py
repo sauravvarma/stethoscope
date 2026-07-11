@@ -20,6 +20,7 @@ MAX_TOOL_CALLS = 256
 MAX_REQUESTS = 4096
 MAX_ID_BYTES = 256
 MAX_JSON_NUMBER_CHARS = 64
+MAX_JSON_DEPTH = 64
 MIN_INTEGER_ID = -(2 ** 63)
 MAX_INTEGER_ID = 2 ** 63 - 1
 MAX_INTERVAL = 60.0
@@ -66,9 +67,28 @@ def _strict_loads(value):
             raise ValueError("JSON number must be finite")
         return number
 
-    return json.loads(
+    parsed = json.loads(
         value, parse_constant=reject_constant,
         parse_int=parse_integer, parse_float=parse_float)
+    pending = [(iter((parsed,)), 0)]
+    while pending:
+        children, depth = pending[-1]
+        try:
+            item = next(children)
+        except StopIteration:
+            pending.pop()
+            continue
+        if isinstance(item, dict):
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                raise ValueError("JSON nesting is too deep")
+            pending.append((iter(item.values()), depth))
+        elif isinstance(item, list):
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                raise ValueError("JSON nesting is too deep")
+            pending.append((iter(item), depth))
+    return parsed
 
 
 def _result(message_id, result):

@@ -16,5 +16,5 @@
 | [0010](0010-recording-baselines.md) | recording, history, and hourly baselines | treated | 2026-07-11 | 2026-07-11 | 13 |
 | [0011](0011-diagnosis-triage.md) | diagnosis and triage composition | treated | 2026-07-11 | 2026-07-11 | 9 |
 | [0012](0012-unified-tui.md) | unified diagnosis-aware TUI | treated | 2026-07-11 | 2026-07-11 | 7 |
-| [0013](0013-mcp-domain.md) | read-only Model Context Protocol domain | treated | 2026-07-11 | 2026-07-11 | 8 |
+| [0013](0013-mcp-domain.md) | read-only Model Context Protocol domain | treated | 2026-07-11 | 2026-07-11 | 9 |
 | [0014](0014-documentation-contract.md) | shipped documentation and review traceability | treated | 2026-07-11 | 2026-07-11 | 6 |
