@@ -1,0 +1,50 @@
+# Copilot inline review disposition
+
+This ledger covers all 34 Copilot inline comments on PRs #37-#49. PRs #36 and
+#44 had no Copilot inline comments. Evidence names the final consolidated source
+or documentation; every concern is now addressed in the shipped design.
+
+| PR | Comment | Concern | Final disposition and evidence |
+|---:|---|---|---|
+| #37 | [3546417174](https://github.com/sauravvarma/stethoscope/pull/37#discussion_r3546417174) | `proc_name` test depended on live host processes. | **Addressed.** `tests/test_disk.py` mocks libproc, process identity, and executable paths and verifies refresh on PID reuse. |
+| #38 | [3546417502](https://github.com/sauravvarma/stethoscope/pull/38#discussion_r3546417502) | Broad `except ImportError` could hide an imported module's internal failure. | **Addressed.** `stethoscope` inserts the repository root once and uses direct package imports/importlib without fallback exception masking. |
+| #39 | [3546429424](https://github.com/sauravvarma/stethoscope/pull/39#discussion_r3546429424) | Interval, limit, and duration needed positive-value validation. | **Addressed.** `core/cli.py` rejects non-finite and non-positive numeric options; scopes apply their upper bounds. |
+| #39 | [3546429461](https://github.com/sauravvarma/stethoscope/pull/39#discussion_r3546429461) | `disk top --json` omitted incomplete process visibility. | **Addressed.** `scopes/disk.py` emits `partial` and `partial_reasons`, including `not_root`. |
+| #39 | [3546429476](https://github.com/sauravvarma/stethoscope/pull/39#discussion_r3546429476) | `disk holds` error documents omitted `cumulative`. | **Addressed.** Success and failure documents retain `cumulative`, `holds`, and `error`; `SCHEMA.md` documents null-on-failure. |
+| #39 | [3546429493](https://github.com/sauravvarma/stethoscope/pull/39#discussion_r3546429493) | `disk busy --json` lacked partial visibility. | **Addressed.** Matched and unmatched results retain the stable visibility envelope in `scopes/disk.py`. |
+| #39 | [3546429509](https://github.com/sauravvarma/stethoscope/pull/39#discussion_r3546429509) | Human-only `inspect` silently accepted agent flags. | **Addressed.** `disk inspect` permits no options; unsupported flags return usage exit 2. |
+| #40 | [3546419949](https://github.com/sauravvarma/stethoscope/pull/40#discussion_r3546419949) | WAKE/s displayed package-idle rate rather than the ranked total. | **Addressed.** `scopes/cpu.py` exposes package-idle and interrupt rates separately and total only for ranking/display; `SCHEMA.md` names each. |
+| #40 | [3546419987](https://github.com/sauravvarma/stethoscope/pull/40#discussion_r3546419987) | Help advertised a permission exit CPU did not return. | **Addressed.** CPU help documents normal 0 and usage 2 while non-root coverage is structured partial data. |
+| #41 | [3546445365](https://github.com/sauravvarma/stethoscope/pull/41#discussion_r3546445365) | `leak_candidate` should latch once observed. | **Addressed.** `scopes/memory.py` returns prior-latched or current-candidate state. |
+| #41 | [3546445406](https://github.com/sauravvarma/stethoscope/pull/41#discussion_r3546445406) | Missing PID and inaccessible PID were conflated. | **Addressed.** `memory watch` maps ESRCH to gone/usage and EPERM to denied/permission. |
+| #41 | [3546445435](https://github.com/sauravvarma/stethoscope/pull/41#discussion_r3546445435) | Watch JSON and exit contracts lacked coverage. | **Addressed.** `tests/test_memory.py` and `SCHEMA.md` cover gone, denied, clean, leak, stable fields, and runtime outcomes. |
+| #42 | [3546435478](https://github.com/sauravvarma/stethoscope/pull/42#discussion_r3546435478) | Wakeup weighting mixed rate and cumulative units. | **Addressed by redesign.** `energy_rate_watts` is real flavor-6 power; pmenergy output is explicitly unitless `energy_score_per_s`, with interval-normalized inputs. |
+| #42 | [3546435522](https://github.com/sauravvarma/stethoscope/pull/42#discussion_r3546435522) | `%d` formatting could crash on null battery fields. | **Addressed.** `scopes/battery.py` formats nullable health values through safe optional formatting. |
+| #42 | [3546435548](https://github.com/sauravvarma/stethoscope/pull/42#discussion_r3546435548) | No-battery or malformed baseline state could crash drainers. | **Addressed.** Battery baselines are schema-validated; absent/error/reset paths retain stable output and are tested. |
+| #42 | [3546435572](https://github.com/sauravvarma/stethoscope/pull/42#discussion_r3546435572) | SCHEMA omitted the `on_ac` reset state. | **Addressed.** `SCHEMA.md` documents always-present `on_ac`, reset reasons, null behavior, and exit semantics. |
+| #43 | [3546422729](https://github.com/sauravvarma/stethoscope/pull/43#discussion_r3546422729) | Common Homebrew smartctl sbin paths were missing. | **Addressed.** `core/smart.py` searches Apple Silicon and Intel bin/sbin locations in addition to PATH. |
+| #43 | [3546422753](https://github.com/sauravvarma/stethoscope/pull/43#discussion_r3546422753) | Valid zero TBW was treated as missing. | **Addressed.** SMART derivation tests explicit `is not None`, preserving zero. |
+| #43 | [3546422770](https://github.com/sauravvarma/stethoscope/pull/43#discussion_r3546422770) | Diskutil "not supported" could mask smartctl pass/fail. | **Addressed.** `scopes/smart.py` lets smartctl failure win and only replaces unknown/unsupported diskutil state with a pass. |
+| #43 | [3546422795](https://github.com/sauravvarma/stethoscope/pull/43#discussion_r3546422795) | Human output rendered `spare None%` and obscured zero TBW. | **Addressed.** Missing values render `?`, while zero survives; `tests/test_smart.py` covers both. |
+| #43 | [3546422837](https://github.com/sauravvarma/stethoscope/pull/43#discussion_r3546422837) | Three-percent wear had inconsistent confidence. | **Addressed.** Life confidence is low below 5%, moderate at 5-19%, and high at 20% or above, with boundary tests. |
+| #45 | [3546429234](https://github.com/sauravvarma/stethoscope/pull/45#discussion_r3546429234) | Non-object/invalid messages could crash and notifications could receive responses. | **Addressed by redesign.** `scopes/mcp_server.py` validates envelopes before dispatch and separates notifications; `tests/test_mcp_server.py` distinguishes malformed no-ID envelopes from silent structurally valid notifications and recognized notification parameter failures. |
+| #45 | [3546429256](https://github.com/sauravvarma/stethoscope/pull/45#discussion_r3546429256) | Malformed JSON was silently dropped instead of returning a parse error. | **Addressed by redesign.** The strict MCP serve loop emits JSON-RPC `-32700`, continues the session, and has malformed-then-valid recovery tests in `tests/test_mcp_server.py`. |
+| #46 | [3546428646](https://github.com/sauravvarma/stethoscope/pull/46#discussion_r3546428646) | README's checkup link pointed to `#`. | **Addressed.** `README.md` links checkup to the real `#checkup-triage-and-history` section and cross-links the schema, man source, and walkthrough. |
+| #46 | [3546428677](https://github.com/sauravvarma/stethoscope/pull/46#discussion_r3546428677) | Man-page synopsis omitted interval and limit where relevant. | **Addressed.** `man/stethoscope.1` has command-specific synopses and includes `--interval`/`--limit` only on commands that implement them. |
+| #46 | [3546428713](https://github.com/sauravvarma/stethoscope/pull/46#discussion_r3546428713) | Walkthrough labeled `cpu wakeups` JSON as command `top`. | **Addressed.** `docs/agent-walkthrough.md` uses `"command":"wakeups"` and explains separate detection counters. |
+| #47 | [3546429546](https://github.com/sauravvarma/stethoscope/pull/47#discussion_r3546429546) | History positionals were parsed but ignored. | **Addressed.** `scopes/record.py` applies the optional scope and rejects unknown/extra positionals. |
+| #47 | [3546429573](https://github.com/sauravvarma/stethoscope/pull/47#discussion_r3546429573) | `record --once` ignored the requested interval. | **Addressed.** Record completes one full `collect_interval(options.interval, ...)`; `tests/test_record.py` verifies timing behavior. |
+| #47 | [3546429598](https://github.com/sauravvarma/stethoscope/pull/47#discussion_r3546429598) | Record help omitted duration and limit. | **Addressed.** Runtime help, README, and man source list both with command-specific bounds. |
+| #47 | [3546429624](https://github.com/sauravvarma/stethoscope/pull/47#discussion_r3546429624) | History help omitted limit. | **Addressed.** Summary and baseline help/man synopses include `--limit`. |
+| #48 | [3546437170](https://github.com/sauravvarma/stethoscope/pull/48#discussion_r3546437170) | Unknown memory pressure mapped to healthy. | **Addressed.** `scopes/tui.py` maps only explicit `normal` to healthy; unknown remains `[UNKNOWN]`. |
+| #48 | [3546437218](https://github.com/sauravvarma/stethoscope/pull/48#discussion_r3546437218) | SMART header order did not match location/verdict row fields. | **Addressed.** Centralized TUI headers and row format use DEVICE, MODEL, LOCATION, VERDICT, WEAR, TEMP; alignment is tested. |
+| #49 | [3546448901](https://github.com/sauravvarma/stethoscope/pull/49#discussion_r3546448901) | `COUNT(*)` was used for an existence check. | **Addressed by redesign.** The final store is append-only `baseline-raw/1` JSONL with bounded incremental replay, not SQLite; no SQL existence query remains. |
+| #49 | [3546448964](https://github.com/sauravvarma/stethoscope/pull/49#discussion_r3546448964) | A redundant conditional always selected triage. | **Addressed.** Direct invocation selects triage; `anomaly` requires one exact supported mode in `scopes/anomaly.py`. |
+
+The MCP findings from PR #45 are specifically regression-tested, not merely
+made obsolete. The PR #46 link, synopsis, and wakeups findings are specifically
+closed by [README.md](../README.md), [man/stethoscope.1](../man/stethoscope.1),
+and [the walkthrough](agent-walkthrough.md).
+
+See also [case 0014](../casebook/0014-documentation-contract.md),
+[ARCHITECTURE.md](../ARCHITECTURE.md), and [DESIGN.md](../DESIGN.md).

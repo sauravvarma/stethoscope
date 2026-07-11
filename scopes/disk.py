@@ -603,7 +603,7 @@ USAGE = """stethoscope disk — per-process disk I/O visibility for macOS
   disk inspect <pid>                      live syscall trace (human, needs sudo)
   disk holds <pid> [--json]               files the process holds open
   disk busy <volume|device> [--json]      pids pinning a disk
-  disk tui                                full-screen interactive view (sudo -E)
+  disk tui                                full-screen interactive view (non-root by default)
 
 Run under sudo to see all processes / all holders:  sudo ./stethoscope disk top
 Examples:  sudo ./stethoscope disk busy "/Volumes/X9 Pro"    sudo ./stethoscope disk busy disk6

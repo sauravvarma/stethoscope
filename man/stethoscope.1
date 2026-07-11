@@ -1,0 +1,308 @@
+.TH STETHOSCOPE 1 "2026-07-11" "stethoscope 0.2.0" "User Commands"
+.SH NAME
+stethoscope \- vital signs for a Mac
+.SH SYNOPSIS
+.B stethoscope
+.B tui
+.br
+.B stethoscope
+.B disk
+.RI [ top ]
+.RB [ \-\-interval " N" ]
+.RB [ \-\-limit " N" ]
+.RB [ \-\-once " | " \-\-duration " N" ]
+.RB [ \-\-json ]
+.br
+.B stethoscope disk inspect
+.I pid
+.br
+.B stethoscope disk holds
+.I pid
+.RB [ \-\-json ]
+.br
+.B stethoscope disk busy
+.I volume-or-device
+.RB [ \-\-json ]
+.br
+.B stethoscope disk tui
+.br
+.B stethoscope cpu
+.RI [ top " | " wakeups ]
+.RB [ \-\-interval " N" ]
+.RB [ \-\-limit " N" ]
+.RB [ \-\-once " | " \-\-duration " N" ]
+.RB [ \-\-json ]
+.br
+.B stethoscope memory
+.RI [ top ]
+.RB [ \-\-interval " N" ]
+.RB [ \-\-limit " N" ]
+.RB [ \-\-once " | " \-\-duration " N" ]
+.RB [ \-\-json ]
+.br
+.B stethoscope memory watch
+.I pid
+.RB [ \-\-interval " N" ]
+.RB [ \-\-once " | " \-\-duration " N" ]
+.RB [ \-\-json ]
+.br
+.B stethoscope battery
+.RI [ health ]
+.RB [ \-\-json ]
+.br
+.B stethoscope battery top
+.RB [ \-\-interval " N" ]
+.RB [ \-\-limit " N" ]
+.RB [ \-\-once " | " \-\-duration " N" ]
+.RB [ \-\-json ]
+.br
+.B stethoscope battery drainers
+.RB [ \-\-limit " N" ]
+.RB [ \-\-json ]
+.br
+.B stethoscope battery inspect
+.RB [ \-\-limit " N" ]
+.RB [ \-\-json ]
+.br
+.B stethoscope smart
+.RI [ status ]
+.RI [ disk ]
+.RB [ \-\-json ]
+.br
+.B stethoscope checkup
+.RB [ \-\-json ]
+.RB [ \-\-interval " N" ]
+.RB [ \-\-limit " N" ]
+.RB [ \-\-since " WHEN" ]
+.RB [ \-\-store " DIR" ]
+.br
+.B stethoscope triage
+.RB [ \-\-json ]
+.RB [ \-\-interval " N" ]
+.RB [ \-\-limit " N" ]
+.RB [ \-\-since " WHEN" ]
+.RB [ \-\-store " DIR" ]
+.br
+.B stethoscope anomaly
+.RI { deviation | leaks | runaway | triage }
+.RB [ \-\-json ]
+.RB [ \-\-interval " N" ]
+.RB [ \-\-limit " N" ]
+.RB [ \-\-since " WHEN" ]
+.RB [ \-\-store " DIR" ]
+.br
+.B stethoscope record
+.RB [ \-\-once " | " \-\-duration " N" ]
+.RB [ \-\-interval " N" ]
+.RB [ \-\-limit " N" ]
+.RB [ \-\-json ]
+.RB [ \-\-store " DIR" ]
+.RB [ \-\-retention\-days " N" ]
+.br
+.B stethoscope history
+.RI [ scope ]
+.RB [ \-\-since " WHEN" ]
+.RB [ \-\-limit " N" ]
+.RB [ \-\-store " DIR" ]
+.RB [ \-\-json ]
+.br
+.B stethoscope history baseline
+.RI [ scope ]
+.RB [ \-\-since " WHEN" ]
+.RB [ \-\-limit " N" ]
+.RB [ \-\-store " DIR" ]
+.RB [ \-\-json ]
+.br
+.B stethoscope mcp
+.SH DESCRIPTION
+.B stethoscope
+is a macOS-only, system-Python-3, standard-library tool.  It exposes native
+process, memory, power, disk, and drive-health probes through human CLI output,
+a unified curses interface, strict JSON documents, and a read-only MCP server.
+There is no third-party runtime dependency.  The
+.B smartctl
+binary is optional detail for SMART data.
+.PP
+Options are command-specific.  Static commands reject sampling flags, and
+human-only commands reject JSON flags.  Numeric intervals, limits, durations,
+and retention periods must be positive and finite where applicable.
+.SH COMMANDS
+.TP
+.B tui
+Open the centralized five-tab disk, CPU, memory, battery, and drives interface.
+Keys 1 through 5 select tabs; Tab cycles; arrows or j/k move; p or Space pauses;
++/\- changes rate; d explicitly runs triage; [/] selects a finding; Enter opens
+its evidence; q or Escape quits.  On disk, v switches process/volume views.
+Process actions are Enter/f for files, i for inspect, and x for confirmed
+SIGTERM.  Volume actions are Enter/r for holders and e for confirmed unmount.
+.TP
+.B disk top
+Rank per-process read and write rates.  Default command for the disk scope.
+.TP
+.BI "disk inspect " pid
+Run a human-only live
+.B fs_usage
+trace.  Requires root and accepts no options.
+.TP
+.BI "disk holds " pid
+List on-disk files held by one process.
+.TP
+.BI "disk busy " target
+Resolve a mount, volume name, device, or whole disk and list visible holders.
+Returns 1 when holders exist.
+.TP
+.B disk tui
+Compatibility entry point for the unified TUI, initially on disk.
+.TP
+.B cpu top
+Rank interval CPU use and report real flavor-6 watts when available, lifetime
+CPU time and awake-age duty, and both wakeup counters.
+.TP
+.B cpu wakeups
+Use the same document as CPU top, ranked by total wakeups for presentation.
+Package-idle and interrupt rates remain separate detector inputs.
+.TP
+.B memory top
+Rank physical footprints and report system memory and pressure.
+.TP
+.BI "memory watch " pid
+Sample one PID, report footprint slope, and latch a leak candidate.  A missing
+PID is a usage result; an existing but inaccessible PID is a permission result.
+.TP
+.B battery health
+Report presence, charge, capacity, cycles, condition, and signed battery flow.
+.TP
+.B battery top
+Rank real flavor-6 energy rate where present and Apple's separately labeled
+unitless Energy Impact score.
+.TP
+.B battery drainers
+Rank cumulative activity since the validated current-unplug baseline.
+.TP
+.B battery inspect
+Use root-only powermetrics detail.  Its Energy Impact remains unitless.
+.TP
+.B smart status
+Report all physical drives, or one optional disk.  diskutil provides the base
+verdict; optional smartctl adds wear, endurance, temperature, and warnings.
+.TP
+.B checkup
+Run a one-shot five-vital exam and canonical triage.  Default interval is one
+second, limit 20, history window 24 hours, and the canonical store.
+.TP
+.B triage
+Rank baseline deviation, leaks, runaways, and point-health findings.
+.TP
+.B anomaly
+Run exactly one of deviation, leaks, runaway, or triage.  Anomaly and triage
+reject \-\-once and \-\-duration; interval is at most 60 seconds and limit at
+most 256.
+.TP
+.B record
+Append completed intervals as daily
+.B baseline-raw/1
+JSONL.  Defaults: 60-second interval, limit 20, retention 30 days.  Interval is
+at most one day, explicit duration 365 days, and retention 3650 days.
+.TP
+.B history
+Summarize a selected optional scope since WHEN.  The baseline form returns
+per-context, per-local-hour p50/p90/p99 buckets.  WHEN accepts values such as
+3h, an ISO timestamp, or a local clock such as 3am.
+.TP
+.B mcp
+Serve MCP protocol 2025-11-25 as strict UTF-8 newline-delimited JSON-RPC 2.0 on
+standard input/output.  The ten read-only tools are disk_top, disk_holds,
+disk_busy, cpu_top, cpu_wakeups, memory_top, battery_health, battery_top,
+smart_status, and checkup.  The server does not expose record, history stores,
+battery drainers, inspect, kill, or eject.
+.SH OPTIONS
+.TP
+.B \-\-json
+Emit strict
+.B stethoscope/1
+JSON instead of human output.  Streaming commands emit one document per
+completed interval.
+.TP
+.B \-\-once
+Complete one requested live interval and exit.
+.TP
+.BI \-\-duration " N"
+Continue emitting completed intervals until at least N seconds elapsed.
+.TP
+.BI \-\-interval " N"
+Set the sample interval in seconds.
+.TP
+.BI \-\-limit " N"
+Set the maximum ranked rows or per-metric history rows.
+.TP
+.BI \-\-since " WHEN"
+Set the history start for checkup, triage, anomaly, or history.
+.TP
+.BI \-\-store " DIR"
+Override the recording/history corpus.
+.TP
+.BI \-\-retention\-days " N"
+Set record retention in days.
+.SH FILES
+.TP
+.I ~/.stethoscope/baseline-raw/YYYY-MM-DD.jsonl
+Append-only recording corpus, one strict
+.B baseline-raw/1
+object per line.
+.TP
+.I ~/.stethoscope/battery_baseline.json
+Schema-validated, atomically replaced
+.B battery-baseline/1
+state for the current unplug session.
+.PP
+Under sudo, these paths resolve to the invoking user's home; they do not
+silently split state into /var/root.
+.SH PERMISSIONS AND LIMITATIONS
+Non-root operation is the default.  macOS may hide other users' process
+accounting, names, holders, and energy.  Commands that remain useful mark JSON
+partial with reasons such as
+.B not_root
+instead of failing.  disk inspect and battery inspect require root; memory watch
+can return a permission failure for an inaccessible existing process.
+.PP
+Missing batteries and physical drives are supported absent states.  Missing
+smartctl is optional partial detail.  Real per-process watts are null where
+rusage flavor 6 is unavailable; the modeled energy score is unitless.  A cold
+or empty history is valid, while malformed, non-finite, overlong, or truncated
+JSONL is partial and exits 4.  MCP preserves OS permissions and can reveal
+sensitive process names, PIDs, users, and paths; use least privilege.
+.SH EXIT STATUS
+.TP
+.B 0
+Completed with no command-defined reportable finding.  For checkup, triage, and
+anomaly, advisory info/warn findings also return 0.
+.TP
+.B 1
+Completed with a reportable condition.  Examples include disk holders, a
+latched memory leak, degraded battery/SMART health, or a critical canonical
+triage/checkup finding.
+.TP
+.B 2
+Invalid invocation.
+.TP
+.B 3
+Required permission unavailable.
+.TP
+.B 4
+Probe, transport, store, replay, or runtime failure.
+.PP
+For MCP tool calls, command exits 0 and 1 are successful results
+(
+.B isError: false
+); 2, 3, and 4 set
+.B isError: true
+.
+.SH SEE ALSO
+The repository's
+.BR README.md ,
+.BR SCHEMA.md ,
+.BR docs/agent-walkthrough.md ,
+.BR ARCHITECTURE.md ,
+.BR DESIGN.md ,
+and
+.BR docs/review-disposition.md .

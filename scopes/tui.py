@@ -1009,7 +1009,9 @@ class App:
             sys.stdout.write("\033[2J\033[H")
             print("stethoscope disk inspect pid %d (%s); Ctrl-C returns" % (
                 pid, widgets.sanitize(name)))
-            disk.cmd_inspect(pid)
+            status = disk.cmd_inspect(pid)
+            if status != cli.EXIT_OK:
+                action_error = "inspect exited with status %d" % status
         except KeyboardInterrupt:
             pass
         except _PROBE_ERRORS as error:
@@ -1227,7 +1229,7 @@ def main(argv=None, initial_tab="disk"):
     except (curses.error, OSError) as error:
         sys.stderr.write(
             "curses could not start: %s\n"
-            "TERM=%r may be unavailable; preserve TERM with sudo -E.\n"
+            "TERM=%r may be unavailable; with sudo, preserve only TERM.\n"
             % (widgets.sanitize(error), os.environ.get("TERM")))
         return cli.EXIT_ERROR
     return cli.EXIT_OK

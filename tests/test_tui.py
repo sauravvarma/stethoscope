@@ -623,6 +623,20 @@ class TestDrawingAndActions(AppTestCase):
         files.assert_called_once_with(42)
         self.assertIn("/bad\npath", popup.call_args[0][1][0])
 
+    def test_inspect_nonzero_exit_is_retained_in_footer(self):
+        app, _window, _clock = self.make_app()
+        app.disk_rows = [disk_row(42)]
+        with redirect_stdout(io.StringIO()), \
+                mock.patch.object(tui.curses, "def_prog_mode"), \
+                mock.patch.object(tui.curses, "endwin"), \
+                mock.patch.object(tui.curses, "reset_prog_mode"), \
+                mock.patch.object(
+                    tui.disk, "cmd_inspect",
+                    return_value=cli.EXIT_PERMISSION), \
+                mock.patch("builtins.input", return_value=""):
+            app.act_inspect()
+        self.assertEqual(app.msg, "inspect exited with status 3")
+
     def test_disk_subview_only_scans_volumes_when_requested(self):
         app, _window, _clock = self.make_app()
         with mock.patch.object(

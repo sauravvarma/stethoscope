@@ -43,7 +43,7 @@ scopes:
             inspect <pid>   why — live syscall trace (sudo)
             holds <pid>     what files a process holds open
             busy <volume>   which pids pin a disk ("why won't it eject")
-            tui             full-screen interactive view (sudo -E)
+            tui             full-screen interactive view (non-root by default)
   cpu     per-process CPU visibility
             top             who is burning CPU now (default) — %CPU, live
                             watts, lifetime CPU time and duty
@@ -72,8 +72,8 @@ examples:
   ./stethoscope battery health
   ./stethoscope smart
   sudo ./stethoscope disk busy "/Volumes/X9 Pro"
-  sudo -E ./stethoscope disk tui
-  sudo -E ./stethoscope tui
+  ./stethoscope disk tui
+  ./stethoscope tui
 """
 
 

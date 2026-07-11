@@ -1,138 +1,169 @@
-# stethoscope — design language (draft)
+# stethoscope unified TUI design language
 
-*A starting point, not a spec. "Vital signs for your Mac" — the personality is a
-clinical instrument: calm, legible, a little clinical-green-on-black, never
-alarmist unless something is actually alarming.*
+This is the shipped design contract for `core/tui.py` and `scopes/tui.py`.
+`scopes/disk_tui.py` is only a compatibility wrapper into the same five-tab
+shell. The personality is a clinical instrument: calm, dense, explicit about
+uncertainty, and urgent only for a real critical state.
 
-## 1. Current visual language (audit of `disk_tui.py`)
+## 1. Semantic palette
 
-What exists today, as-built:
+`core.tui.Palette` maps roles to curses pairs with the terminal background:
 
-- **Color pairs** (`curses` pairs 1–5, default terminal background):
-  - `C_ACCENT` — cyan. Used for the status sub-bar (system read/write, refresh
-    rate, live/paused state).
-  - `C_READ` — green, `C_WRITE` — yellow. **Defined but currently unused** —
-    no code path applies them to the read/write columns. Worth noting as the
-    single biggest color gap: the read-vs-write semantic exists in the
-    palette but not on screen yet.
-  - `C_BAR` — black-on-cyan. Title bar and footer.
-  - `C_SEL` — white-on-blue. Selected row.
-- **Layout grammar**: title bar (row 0) → status sub-bar (row 1) → blank →
-  column header (row 3, bold) → table body → footer (last row, keys legend).
-  Two tabs (`Processes` / `Volumes`) live inside the title bar itself, not a
-  separate tab row.
-- **Popups**: `curses.newwin` box-drawn overlay, centered, bold title inline
-  in the top border, dimmed hint line at the bottom (`any key to close`).
-  Used for read-only detail (held files, volume holders).
-- **Prompts**: destructive actions (`kill`, `eject`) reuse the footer message
-  slot as an inline `question [y/N]` — no popup, no color escalation. A
-  keypress other than `y`/`Y` cancels silently.
-- **Typography**: bold for emphasis (column headers, selected row, popup
-  title, bar text); dim for de-emphasis (the "not root" notice, popup hint
-  line, empty-state text). No italics, no underline — `curses` support for
-  either is inconsistent across terminals, so the tool doesn't rely on them.
-- **Empty/degraded states**: `(no disk I/O this interval)`, `(no mounted
-  volumes)`, `(no on-disk files held — try sudo)` — dimmed, single line,
-  plain language, no error styling.
-
-This is a clean, minimal base: five color pairs, two weights (bold/dim), one
-popup pattern, one prompt pattern. The gaps are less about what's wrong and
-more about what hasn't been decided yet as more scopes arrive.
-
-## 2. Proposed design language
-
-### Semantic color roles (not literal curses pairs — a vocabulary to map onto pairs per-scope)
-
-| Role | Suggested color | Meaning |
+| Role | Default | Meaning |
 |---|---|---|
-| `accent` | cyan | Chrome: bars, active tab, sub-bar text. The instrument's "on" light. |
-| `ingress` (read / in / charge / inbound) | green | Anything flowing *into* the system or *toward* health. |
-| `egress` (write / out / discharge / outbound) | yellow | Anything flowing *out of* the system — not bad, just the other direction. |
-| `selection` | blue bg / white fg | Cursor focus. Reserved exclusively for "this row is selected," never reused for status. |
-| `healthy` | green | State, not flow — e.g. SMART "good", battery cycle count nominal. |
-| `warning` | yellow | Degraded but not urgent — e.g. blocked syscall, battery below 20%. |
-| `critical` | red (new) | Needs attention now — e.g. disk near-full, SMART pre-fail, thermal throttle. Currently **no scope uses red**; reserve it exclusively for this tier so it stays meaningful. |
-| `dim` (not a color, a weight) | terminal default + `A_DIM` | Secondary information: hints, disabled-state notices, popup footers. |
+| `accent` | cyan | live status and instrument chrome |
+| `read` | green | shared disk-ingress vocabulary; not applied per cell in 0.2 |
+| `write` | yellow | shared disk-egress vocabulary; not applied per cell in 0.2 |
+| `bar` | black on cyan | title and footer bars |
+| `selection` | white on blue | selected table row only |
+| `healthy` | green | observed healthy state |
+| `warn` | yellow | degraded/advisory state |
+| `critical` | red | action-worthy critical state |
+| `unknown` | magenta | unknown, partial, absent, or failed evidence |
 
-Key proposal: **green/yellow's meaning should shift with context but never
-overload two meanings on one screen.** `disk`'s table uses green/yellow for
-read/write (a flow). A future `battery` scope's health line would use the
-same green/yellow/red for state tiers, but the two never appear in the same
-view, so the color stays unambiguous. If that turns out to be false (a
-combined dashboard view mixes both), we need a fourth pair of hues for state
-so flow and health are visually distinct — flagged below as an open question.
+Color never carries state alone. Every health state is also rendered as
+`[HEALTHY]`, `[INFO]`, `[WARN]`, `[CRITICAL]`, `[UNKNOWN]`, `[ABSENT]`,
+`[ERROR]`, or `[PARTIAL]`. If curses has no colors, all content remains
+information-complete. Bold means focus/critical emphasis; dim means secondary
+or empty-state text. The UI does not depend on italic or underline support.
 
-### Typography-in-terminal rules
+Flow color and health color may share hues because labels and columns supply
+non-color semantics. A selected row always uses the selection role, so cursor
+focus cannot be confused with health.
 
-- **Bold** = "read this first": column headers, the active tab label, the
-  selected row, values that just crossed into a warning/critical tier.
-- **Dim** = "context, not content": empty states, footnotes, hints,
-  timestamps, anything true but not actionable.
-- **Plain weight** = the default, steady-state data. Most of the table.
-- Never bold *and* colored red/yellow for the same cell unless it's a
-  critical-tier alert — bold is cheap, so it must stay rare or it stops
-  meaning "look here."
+The current row renderer applies one attribute to a complete row, so disk
+read/write cells remain monochrome rather than incorrectly coloring both flows
+with one role. `READ/s` and `WRITE/s` headings provide the distinction. The
+roles stay available for a future cell-aware renderer.
 
-### Layout grammar (for scopes beyond `disk`)
+## 2. Global navigation
 
+The shell has exactly five global tabs:
+
+1. disk
+2. CPU
+3. memory
+4. battery
+5. drives (SMART)
+
+Numeric keys select directly; Tab and Shift-Tab cycle. Arrow keys or `j`/`k`
+move the active table selection. `p`/Space pauses, `+`/`-` changes the interval
+between 0.5 and 10 seconds, and `q`/Esc quits. Tab selection and table selection
+are retained independently.
+
+Diagnosis is explicit, not a hidden periodic cost. Pressing `d` runs canonical
+triage once and focuses the findings strip. `[`/`]` changes the selected
+finding. Enter while findings are focused opens its evidence and drill-down
+commands. Esc first leaves findings focus.
+
+## 3. Layout grammar
+
+```text
+row 0       title bar: stethoscope, five tabs, root/user, clock
+row 1       active-tab aggregate status and bounded sparkline
+row 2       canonical findings strip
+row 3       non-root/partial visibility notice when applicable
+row 4       active table's bold column headings
+rows 5..n-2 scrollable table body or explicit empty/degraded text
+row n-1     context key legend, probe error, message, or [y/N] prompt
 ```
-┌ row 0: title bar ── scope name · [tab list] ──────────── mode · clock ┐
-│ row 1: status sub-bar ── one line of live aggregate stats ────────────│
-│ row 2: (blank spacer)                                                 │
-│ row 3: column header (bold)                                           │
-│ rows 4..n-2: table body (selection = blue bg, else plain)             │
-│ row n-1: footer ── key legend, or inline confirm/message ─────────────│
-└─────────────────────────────────────────────────────────────────────┘
-```
 
-- **Tab bar stays inside row 0**, not a dedicated row — screen real estate on
-  a terminal is precious, and `disk`'s pattern of folding tabs into the title
-  bar should generalize: `[1]disk [2]cpu [3]memory [4]battery [5]smart`.
-- **Status sub-bar (row 1)** is the scope's "vitals at a glance" line — one
-  line, always visible, no scrolling. Every scope should have exactly one.
-- **Popups** stay the single mechanism for "more detail on the current
-  selection" — box-drawn, centered, bold title in the border, dimmed footer
-  hint. Don't invent a second popup style; if a scope needs richer detail
-  than a popup can hold, that's a case for a dedicated full-screen view
-  (like `inspect` dropping to a streamed sub-process), not a bigger popup.
-- **Footer** is overloaded today (keys legend / inline message / confirm
-  prompt share one line) — that's fine at this density; keep it a single
-  line and let states take turns rather than stacking.
+The findings row is always present. Before diagnosis it says to press `d`;
+afterward it shows healthy, partial/error, or one indexed finding. This prevents
+"not sampled" from looking like "no findings."
 
-### Interaction conventions
+The footer is a single state slot. The normal key legend yields to the active
+probe error, action result, or confirmation prompt rather than stacking rows and
+shrinking data.
 
-- **Read-only actions** (view files, view holders, inspect) — no
-  confirmation, instant popup or mode switch.
-- **Destructive / irreversible actions** (kill, eject, and future ones like
-  "clear SMART history" or "force-unmount") — always the inline
-  `question? [y/N]` pattern in the footer, defaulting to No, any non-y/Y
-  key cancels. Keep this pattern rather than a popup for confirmations: it's
-  lower-ceremony and matches "instrument," not "installer wizard."
-- **Escalating confirmations**: if a future action is destructive *and*
-  system-critical (e.g. killing a root/daemon process), consider requiring
-  the pid/volume name to be echoed in the prompt text (already true for
-  `kill`/`eject` today) plus bolding the target name in `critical` color —
-  not a second keypress, just a stronger visual cue before the same y/N.
+## 4. Tab content
 
-## 3. Open questions
+- **Disk:** process rows show PID, command, read/write rates, and cumulative
+  bytes. `v` switches to the volume subview. Process actions are files
+  (`Enter`/`f`), streamed inspect (`i`), and confirmed SIGTERM (`x`). Volume
+  actions are holders (`Enter`/`r`) and confirmed unmount (`e`).
+- **CPU:** rows show CPU/user/system, real watts where available, wakeup rates,
+  lifetime CPU, and duty.
+- **Memory:** status labels pressure without treating unknown as healthy; rows
+  rank footprint and resident size.
+- **Battery:** status labels health/presence/partial model state and keeps real
+  watts separate from unitless score; rows rank attribution.
+- **Drives:** rows align device, model, location, verdict, wear, and temperature.
+  The status distinguishes failed enumeration, no physical drives, optional
+  detail gaps, warnings, and critical findings.
 
-1. **Flow vs. state color collision.** If a future combined/overview screen
-   shows read/write flow *and* health tiers side by side, green/yellow will
-   mean two different things at once. Do we need a second hue pair for
-   state (e.g. blue-green/orange) or a non-color cue (icons like `●`/`▲`)?
-2. **Should `C_READ`/`C_WRITE` actually get wired up** in the disk table
-   (currently defined, unused), or was leaving read/write monochrome a
-   deliberate low-noise choice worth keeping as-is?
-3. ~~**Red's debut.**~~ *Resolved by ARCHITECTURE.md §8: red debuts as a
-   `critical` finding in the findings strip — a verdict, not a gauge.*
-4. ~~**Cross-scope tab bar**~~ — *resolved by ARCHITECTURE.md §8: every
-   scope keeps its own `<scope> tui`, and a unified `stethoscope tui`
-   composes all scopes as tabs in row 0.*
-5. ~~**Sparklines / trend cues.**~~ *Resolved by ARCHITECTURE.md §8: yes —
-   the `Sampler`'s ring buffers already hold the last N intervals, so
-   per-row sparklines are a rendering problem; `core/tui.py` owns the
-   widgets.*
-6. **Non-color accessibility fallback.** `curses.has_colors()` is already
-   checked, but is monochrome-mode information-complete (e.g. can a
-   colorblind or `TERM=dumb` user still tell read from write, healthy from
-   critical) without color as the only signal?
+Disk is the only tab with a nested process/volume subview and mutating actions.
+The global `1`-`5` keys never become local disk subview keys.
+
+## 5. Sampling and degraded states
+
+Only the active tab probes. Entering a tab initializes its data, so inactive
+disk/CPU/battery delta snapshots do not age into misleading rates. Returning to
+the disk process view re-primes it. Volume data is loaded lazily. SMART refresh
+is clamped to at least five seconds. Pause freezes sampling, not navigation.
+
+Failures are local to a tab and do not terminate the shell. The UI distinguishes:
+
+- non-root visibility: `[PARTIAL]`, with hidden-process explanation;
+- no battery or no physical drives: `[ABSENT]`, not healthy;
+- unavailable pressure or health: `[UNKNOWN]`;
+- failed native probe: `[ERROR]`/explicit footer detail;
+- optional smartctl or energy-model gaps: `[PARTIAL]`;
+- flavor-6 watts unavailable: `-`, never `0`;
+- no interval activity: a dim, plain-language empty row.
+
+External text is sanitized before rendering. All drawing is clipped through
+`safe_addstr`; resize and lower-right curses errors do not crash the interface.
+
+## 6. Narrow terminals
+
+The title chooses progressively shorter forms: full five-tab title with
+root/user and clock, active-tab-only title, active token, then `stethoscope`.
+If none fits, it clips safely. Status, findings, headers, rows, and footer are
+also clipped rather than wrapped into neighboring rows.
+
+Tables calculate body capacity from rows 5 through the line above the footer and
+scroll to keep the selected row visible. A popup requires at least 5 rows by 10
+columns; otherwise the footer reports `screen too small for popup`. This is an
+explicit degraded state, not an uncaught curses exception.
+
+## 7. Popups, streams, and prompts
+
+Read-only detail uses one centered boxed popup pattern: title in the border,
+bounded body, omitted-line count, and `any key to close` footer. Findings, held
+files, and volume holders use it.
+
+Disk inspect is too dynamic for a popup. The shell saves curses state, clears the
+screen, streams `fs_usage`, waits for return, then restores the shell. Failures
+are returned to the footer.
+
+Destructive actions use an inline footer prompt containing the exact PID/name or
+volume: `question [y/N]`. Only `y`/`Y` confirms; every other key defaults to No.
+Kill sends SIGTERM. Eject currently invokes `diskutil unmount`.
+
+## 8. Resolved and future questions
+
+Resolved in 0.2:
+
+- Non-color accessibility is complete through labels, headings, and units.
+- Red is reserved for explicit critical state.
+- Read/write is information-complete through headings; per-cell flow color is
+  intentionally deferred until the row renderer supports mixed attributes.
+- One centralized shell replaces per-scope TUIs.
+- Findings are opt-in through `d`, never an unexplained background probe.
+- Narrow screens clip and degrade explicitly.
+
+Genuinely unresolved future enhancements:
+
+- horizontal column reduction for extremely narrow but otherwise usable screens;
+- scrollable popup bodies rather than the current bounded omitted-line summary;
+- configurable key bindings or refresh bounds;
+- richer per-row trend cues beyond the current aggregate sparklines.
+
+These are not shipped controls. Any implementation must retain non-color labels,
+lazy active-tab sampling, explicit degraded states, and confirmation defaults.
+
+Related references: [README.md](README.md), [SCHEMA.md](SCHEMA.md),
+[ARCHITECTURE.md](ARCHITECTURE.md), the
+[agent walkthrough](docs/agent-walkthrough.md), and
+[review dispositions](docs/review-disposition.md).

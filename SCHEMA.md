@@ -4,6 +4,13 @@
 parse human-rendered output. Streaming commands write one JSON document per
 completed sample interval, one document per line (NDJSON).
 
+Start with the [agent walkthrough](docs/agent-walkthrough.md) for an
+investigation sequence and MCP handshake. Human command synopses are in
+[README.md](README.md) and the [man-page source](man/stethoscope.1); architecture
+and review rationale are in [ARCHITECTURE.md](ARCHITECTURE.md),
+[DESIGN.md](DESIGN.md), and
+[docs/review-disposition.md](docs/review-disposition.md).
+
 ## Compatibility
 
 Every document has `"schema": "stethoscope/1"`.
@@ -76,7 +83,10 @@ Input lines, output documents, repeated calls, strings, sampling intervals
 accepted as numbers or integers, and tool argument objects reject unknown
 properties. Request IDs may be integers or strings; null, booleans, fractional
 numbers, and reuse within a session are invalid. Request parameter objects may
-carry the MCP-standard `_meta` object. Invalid notifications remain silent.
+carry the MCP-standard `_meta` object. Structurally valid notifications remain
+silent, including recognized notifications whose object parameters fail
+method-level validation. A malformed no-ID envelope is an invalid request, not a
+notification, and receives `-32600`.
 
 The concrete transport ceilings are 1 MiB per input line, 4 MiB per structured
 tool document, 256 tool calls, and 4096 unique request IDs per server process;
@@ -557,25 +567,15 @@ All modes use the same stable result fields:
   "overall": "warn",
   "findings": [
     {
-      "code": "process_footprint_leak",
+      "code": "memory_pressure_warn",
       "severity": "warn",
       "area": "memory",
-      "detector": "leak",
-      "message": "worker (pid 500) has sustained footprint growth",
-      "score": 47,
-      "confidence": "moderate",
-      "drill_down": [
-        "stethoscope memory watch 500",
-        "stethoscope memory top"
-      ],
-      "evidence": {
-        "pid": 500,
-        "start_ticks": 900,
-        "sample_count": 6,
-        "span_seconds": 3600.0,
-        "slope_mib_per_min": 7.0,
-        "plateaued": false
-      }
+      "detector": "point",
+      "message": "kernel memory pressure is elevated",
+      "score": 60,
+      "confidence": "high",
+      "drill_down": ["stethoscope memory top"],
+      "evidence": {"pressure": "warn"}
     }
   ],
   "notes": [],
@@ -714,7 +714,7 @@ source-partial reasons.
     "interval_s": 1.01,
     "privilege": "user",
     "power_state": "battery",
-    "process_count": 12
+    "process_count": 1
   },
   "vitals": {
     "cpu": {
