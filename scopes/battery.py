@@ -469,6 +469,21 @@ def rank_top(prev, cur, dt, coeffs):
     return rows, sys_totals
 
 
+def power_model():
+    """Return the public pmenergy model consumed by CLI and TUI surfaces.
+
+    Keeping this adapter here prevents presentation layers from reaching
+    through the battery scope into ``core.power``.
+    """
+    coefficients, source, error = power.pmenergy_coefficients()
+    return {
+        "coefficients": coefficients,
+        "source": source,
+        "error": error,
+        "available": coefficients is not None,
+    }
+
+
 def _top_entry(row):
     return {
         "pid": row.pid,
@@ -534,7 +549,9 @@ def cmd_top(options):
     """
     if not options.json:
         warn_if_not_root()
-    coeffs, coeffs_path, _ = power.pmenergy_coefficients()
+    model = power_model()
+    coeffs = model["coefficients"]
+    coeffs_path = model["source"]
     extra_reasons = () if coeffs is not None else ("no_pmenergy_coefficients",)
 
     prev = snapshot_power()

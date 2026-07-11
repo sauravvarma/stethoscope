@@ -18,6 +18,7 @@ reusable data layer in scopes/<name>.py.
   stethoscope anomaly <cmd>   deviation, leaks, runaway, or triage
   stethoscope record          append live vitals to a local JSONL corpus
   stethoscope history [scope] summarize recorded vitals and baselines
+  stethoscope tui             unified live terminal interface
 
 No third-party dependencies — system Python 3 only.
 """
@@ -35,6 +36,7 @@ USAGE = """stethoscope — vital signs for your Mac
 usage: stethoscope <scope> [command] [args]
 
 scopes:
+  tui     unified live view: disk, cpu, memory, battery, drives
   disk    per-process disk I/O visibility
             top             who is doing disk I/O now (default)
             inspect <pid>   why — live syscall trace (sudo)
@@ -69,10 +71,12 @@ examples:
   ./stethoscope smart
   sudo ./stethoscope disk busy "/Volumes/X9 Pro"
   sudo -E ./stethoscope disk tui
+  sudo -E ./stethoscope tui
 """
 
 
 SCOPES = {
+    "tui": {"module": "scopes.tui"},
     "disk": {"module": "scopes.disk", "tui": "scopes.disk_tui"},
     "cpu": {"module": "scopes.cpu"},
     "memory": {"module": "scopes.memory"},
@@ -100,7 +104,8 @@ def main(argv):
     spec = SCOPES.get(scope)
     if spec is not None:
         if args and args[0] == "tui" and spec.get("tui"):
-            return _load(spec["tui"]).main()
+            return _load(spec["tui"]).main(
+                ["stethoscope %s tui" % scope] + args[1:])
         return _load(spec["module"]).main(["stethoscope %s" % scope] + args)
 
     sys.stderr.write("unknown scope: %s\n\n%s" % (scope, USAGE))

@@ -329,6 +329,70 @@ def drive_health(dev, internal, smartctl_bin):
     return h
 
 
+def collect_health(only=None):
+    """Collect structured SMART health once for any presentation surface.
+
+    ``enumeration_error`` distinguishes a failed diskutil probe from the
+    supported empty ``drives`` result. Optional smartctl absence and incomplete
+    per-drive probes are represented as partial reasons, never as health.
+    """
+    smartctl_bin = probe.find_smartctl()
+    physical = probe.list_physical_drives()
+    if physical is None:
+        message = "diskutil is unavailable or failed; cannot enumerate drives"
+        return {
+            "drives": [],
+            "smartctl_path": smartctl_bin,
+            "smartctl_available": smartctl_bin is not None,
+            "partial": True,
+            "partial_reasons": ["diskutil_unavailable"],
+            "enumeration_error": message,
+            "selection_error": None,
+        }
+
+    if only:
+        normalized = only.replace("/dev/", "")
+        matched = [(dev, internal) for dev, internal in physical
+                   if dev == normalized]
+        if not matched:
+            return {
+                "drives": [],
+                "smartctl_path": smartctl_bin,
+                "smartctl_available": smartctl_bin is not None,
+                "partial": False,
+                "partial_reasons": [],
+                "enumeration_error": None,
+                "selection_error":
+                    "no physical drive %r (try: diskutil list physical)"
+                    % normalized,
+            }
+        physical = matched
+
+    results = [
+        drive_health(device, internal, smartctl_bin)
+        for device, internal in physical
+    ]
+    reasons = []
+    if any(health.get("diskutil_detail") for health in results):
+        reasons.append("diskutil_probe_incomplete")
+    if smartctl_bin is None and results:
+        reasons.append("smartctl_unavailable")
+    elif any(
+            not health.get("smartctl_available")
+            or health.get("smartctl_detail")
+            for health in results):
+        reasons.append("smartctl_probe_incomplete")
+    return {
+        "drives": results,
+        "smartctl_path": smartctl_bin,
+        "smartctl_available": smartctl_bin is not None,
+        "partial": bool(reasons),
+        "partial_reasons": reasons,
+        "enumeration_error": None,
+        "selection_error": None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # presentation
 # ---------------------------------------------------------------------------
@@ -389,11 +453,10 @@ def _render(drives, smartctl_bin):
 
 def cmd_status(options):
     """SMART health for each physical drive, or just the one named."""
-    smartctl_bin = probe.find_smartctl()
-    drives = probe.list_physical_drives()
-
-    if drives is None:
-        message = "diskutil is unavailable or failed; cannot enumerate drives"
+    only = options.rest[0] if options.rest else None
+    collection = collect_health(only)
+    message = collection["enumeration_error"]
+    if message:
         if options.json:
             cli.emit_json(schema.document(
                 "smart", "status", partial=True,
@@ -403,38 +466,25 @@ def cmd_status(options):
             sys.stderr.write(message + "\n")
         return cli.EXIT_ERROR
 
-    only = options.rest[0] if options.rest else None
-    if only:
-        only = only.replace("/dev/", "")
-        matched = [(d, i) for d, i in drives if d == only]
-        if not matched:
-            message = "no physical drive %r (try: diskutil list physical)" % only
-            if options.json:
-                cli.emit_json(schema.document(
-                    "smart", "status", drives=[], error=message))
-            else:
-                sys.stderr.write(message + "\n")
-            return cli.EXIT_USAGE
-        drives = matched
+    message = collection["selection_error"]
+    if message:
+        if options.json:
+            cli.emit_json(schema.document(
+                "smart", "status", drives=[], error=message))
+        else:
+            sys.stderr.write(message + "\n")
+        return cli.EXIT_USAGE
 
-    results = [drive_health(dev, internal, smartctl_bin) for dev, internal in drives]
-
-    reasons = []
-    if any(h.get("diskutil_detail") for h in results):
-        reasons.append("diskutil_probe_incomplete")
-    if smartctl_bin is None:
-        reasons.append("smartctl_unavailable")
-    elif any(not h["smartctl_available"] or h.get("smartctl_detail")
-             for h in results):
-        reasons.append("smartctl_probe_incomplete")
-    partial = bool(reasons)
+    results = collection["drives"]
+    reasons = collection["partial_reasons"]
+    partial = collection["partial"]
 
     if options.json:
         cli.emit_json(schema.document(
             "smart", "status", partial=partial, partial_reasons=reasons,
             drives=results, error=None))
     else:
-        sys.stdout.write(_render(results, smartctl_bin))
+        sys.stdout.write(_render(results, collection["smartctl_path"]))
 
     if any(h["worst_severity"] != "ok" for h in results):
         return cli.EXIT_FINDINGS
