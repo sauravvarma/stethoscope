@@ -247,6 +247,84 @@ observed. If the process exits or its PID is reused, one final document has
 `1` when the run latched a leak candidate, `0` otherwise, `2` for a missing
 PID, and `3` when the process exists but is inaccessible.
 
+## `smart status [disk]`
+
+```json
+{
+  "schema": "stethoscope/1",
+  "scope": "smart",
+  "command": "status",
+  "partial": false,
+  "partial_reasons": [],
+  "drives": [
+    {
+      "device": "disk0",
+      "internal": true,
+      "name": "APPLE SSD",
+      "size_bytes": 251000193024,
+      "solid_state": true,
+      "smart_status": "verified",
+      "diskutil_detail": null,
+      "source": "smartctl",
+      "smartctl_available": true,
+      "smartctl_detail": null,
+      "smartctl_exit_status": 0,
+      "passed": true,
+      "percentage_used": 12,
+      "power_on_hours": 5000,
+      "data_units_written": 123456,
+      "tbw_tb": 0.06,
+      "available_spare": 100,
+      "available_spare_threshold": 10,
+      "media_errors": 0,
+      "critical_warning": 0,
+      "reallocated_sector_ct": null,
+      "reallocated_event_count": null,
+      "current_pending_sector": null,
+      "offline_uncorrectable": null,
+      "reported_uncorrectable": null,
+      "ata_failing_attributes": [],
+      "ata_usage_attributes_now": [],
+      "ata_failed_attributes_past": [],
+      "temperature_c": 42,
+      "life": {
+        "remaining_life_pct": 88,
+        "consumed_life_pct": 12,
+        "remaining_hours": 36667,
+        "remaining_years": 4.2,
+        "confidence": "moderate"
+      },
+      "warnings": [],
+      "worst_severity": "ok"
+    }
+  ],
+  "error": null
+}
+```
+
+`diskutil` supplies the dependency-free verdict and inventory. When available,
+`smartctl` supplies wear, endurance, temperature, and warning inputs. Every
+optional measurement remains present as `null` when unknown; a valid zero is
+not treated as missing. `smart_status` is `verified`, `failing`,
+`not supported`, or `unknown`. `life.confidence` is `low`, `moderate`, or
+`high`. Each warning contains stable `code`, `severity`, and `message` fields.
+`smartctl_exit_status` preserves smartctl's bitmask so failing status,
+attribute-threshold, device-error-log, and self-test-log signals are not lost.
+The ATA attribute arrays distinguish current pre-failure thresholds, current
+old-age/usage thresholds, and prior threshold crossings when smartctl supplies
+them. `tbw_tb` may be derived from NVMe data units or common ATA host-write
+counters; `data_units_written` remains NVMe-specific.
+
+Missing smartctl detail marks the document partial with
+`smartctl_unavailable` or `smartctl_probe_incomplete`; the drive and diskutil
+verdict remain usable. A per-drive diskutil info failure adds
+`diskutil_probe_incomplete`. A diskutil enumeration failure sets
+`partial_reasons: ["diskutil_unavailable"]`, returns an empty `drives` array,
+sets `error`, and exits `4`. Exit is `1` when any drive has a critical state
+or warning, `0` when no finding is present, and `2` for an unknown requested
+disk or malformed invocation.
+As a static command, SMART supports `--json` but rejects sampling flags.
+
 ## Changelog
 
-- `stethoscope/1`: stable common envelope and disk/CPU/memory contracts.
+- `stethoscope/1`: stable common envelope and disk/CPU/memory/SMART contracts.
