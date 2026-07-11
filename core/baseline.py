@@ -139,21 +139,56 @@ def default_store():
     return os.path.join(effective_user()[0], ".stethoscope", "baseline-raw")
 
 
-def _directory_fd(path, create):
-    """Open an absolute directory by descriptor without following symlinks."""
+def _resolve_root_alias(path):
+    """Resolve only immutable, root-owned aliases directly below ``/``."""
     path = os.path.abspath(path)
+    for _hop in range(8):
+        parts = [part for part in path.split(os.sep) if part]
+        if not parts:
+            return path
+        alias = os.path.join(os.sep, parts[0])
+        try:
+            alias_info = os.lstat(alias)
+        except FileNotFoundError:
+            return path
+        except OSError as exc:
+            raise StoreError(
+                "cannot inspect store path alias %s: %s" % (alias, exc)) from exc
+        if not stat.S_ISLNK(alias_info.st_mode):
+            return path
+        try:
+            root_info = os.stat(os.sep)
+            if (alias_info.st_uid != 0 or root_info.st_uid != 0
+                    or root_info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
+                raise StoreError("unsafe root-owned store path alias: %s" % alias)
+            target = os.readlink(alias)
+        except StoreError:
+            raise
+        except OSError as exc:
+            raise StoreError(
+                "cannot resolve store path alias %s: %s" % (alias, exc)) from exc
+        if not os.path.isabs(target):
+            target = os.path.join(os.sep, target)
+        path = os.path.abspath(os.path.join(target, *parts[1:]))
+    raise StoreError("too many root-owned store path aliases")
+
+
+def _directory_fd(path, create):
+    """Open a directory by descriptor without following user-controlled links."""
+    requested_path = os.path.abspath(path)
+    path = _resolve_root_alias(requested_path)
     parts = [part for part in path.split(os.sep) if part]
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(os.sep, flags)
     home, uid, gid = effective_user()
     owner = (uid, gid)
-    home = os.path.abspath(home)
+    home = _resolve_root_alias(os.path.abspath(home))
     try:
         below_home = os.path.commonpath((path, home)) == home
     except ValueError:
         below_home = False
     current_path = os.sep
+    fd = os.open(os.sep, flags)
     try:
         for part in parts:
             created = False
@@ -208,7 +243,8 @@ def _directory_fd(path, create):
         os.close(fd)
         if isinstance(exc, StoreError):
             raise
-        raise StoreError("cannot open store %s: %s" % (path, exc)) from exc
+        raise StoreError(
+            "cannot open store %s: %s" % (requested_path, exc)) from exc
 
 
 def _open_regular(directory_fd, name, flags, mode=0o600):

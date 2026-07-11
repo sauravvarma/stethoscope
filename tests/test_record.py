@@ -180,6 +180,30 @@ class StoreCase(TempCorpusMixin, unittest.TestCase):
             "errors_omitted": 0, "files": [],
         })
 
+    def test_root_owned_tmp_alias_supports_absolute_store_paths(self):
+        with tempfile.TemporaryDirectory(
+                prefix=".record-root-alias-", dir="/tmp") as temporary:
+            path = os.path.join(temporary, "corpus")
+            with baseline.Corpus(path) as corpus:
+                corpus.append(raw())
+            self.assertEqual(len(baseline.replay(path, 0)["records"]), 1)
+
+    def test_user_controlled_store_symlink_is_not_followed(self):
+        target = os.path.join(self.temp.name, "target")
+        os.mkdir(target)
+        os.symlink(target, self.path)
+        with self.assertRaises(baseline.StoreError):
+            baseline.Corpus(self.path).acquire()
+
+    def test_effective_user_failure_precedes_root_descriptor_open(self):
+        with mock.patch.object(
+                baseline, "effective_user",
+                side_effect=baseline.StoreError("bad sudo user")), \
+                mock.patch.object(baseline.os, "open") as opened:
+            with self.assertRaisesRegex(baseline.StoreError, "bad sudo user"):
+                baseline._directory_fd(self.path, create=False)
+        opened.assert_not_called()
+
     def test_partial_final_line_is_parsed_but_reported(self):
         self.append(raw())
         name = baseline.daily_name(raw()["recorded_at"])

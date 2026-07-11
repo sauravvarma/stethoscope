@@ -860,6 +860,10 @@ otherwise.
 `stethoscope record` appends strict JSON objects (not `stethoscope/1`
 envelopes) to local-date `YYYY-MM-DD.jsonl` files. One complete object occupies
 one line. Files are append-only and retained for 30 days by default.
+Descriptor traversal rejects user-controlled symlinks. On macOS, immutable
+root-owned aliases directly below `/` (notably `/tmp` and `/var`) are resolved
+before the no-follow traversal so absolute `--store` paths produced by
+`mktemp` remain usable.
 
 ```json
 {

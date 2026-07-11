@@ -150,3 +150,18 @@ downstream per-scope ranking complete. The bounded line ceiling is 4 MiB so the
 maximum production union still fits when every executable basename reaches the
 filesystem's 255-byte component limit; oversized hostile input remains
 rejected and replayed with bounded memory.
+
+## 0010.13 · 2026-07-11 · failure — macOS root aliases blocked custom stores
+
+Live release validation used `mktemp` for an isolated `--store` and exposed a
+gap hidden by repository-local test fixtures: macOS presents `/tmp` and `/var`
+as root-owned aliases into `/private`. Applying `O_NOFOLLOW` to the first
+component rejected those normal absolute paths before reaching any
+user-controlled component.
+
+Traversal now resolves only symlinks directly below `/` when both the alias and
+its non-writable parent are root-owned, with a bounded hop count. Every
+subsequent component still uses descriptor-relative `O_NOFOLLOW`, and a
+user-controlled store symlink remains rejected. Regression coverage records and
+replays through `/tmp` while separately proving that a nested symlink is not
+followed.
