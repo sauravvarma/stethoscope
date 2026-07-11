@@ -294,6 +294,54 @@ def proc_diskio(pid):
     return (info.ri_diskio_bytesread, info.ri_diskio_byteswritten)
 
 
+def proc_power_sample(pid):
+    """One battery-scope poll: identity + every cumulative counter its
+    energy_score needs (CPU time, pkg-idle/interrupt wakeups, the flavor-6
+    energy ledger, disk bytes), from a single struct read.
+
+    A narrow addition for the battery scope (case 0009): `proc_cpu_sample`
+    already reads this same struct but does not surface
+    ri_diskio_bytesread/byteswritten, and pmenergy's Energy Impact formula
+    needs them alongside CPU time and pkg-idle wakeups. Re-reading via a
+    second `_raw_rusage` call per pid per poll (as a naive `proc_diskio`
+    call alongside `proc_cpu_sample` would) doubles the syscall count for
+    every accessible process every interval; this reads the struct once.
+
+    Returns None if inaccessible. Otherwise a dict: "identity" is the
+    (pid, ri_proc_start_abstime) pid-reuse-safe key (S10); "cpu_user_ns" /
+    "cpu_system_ns" are timebase-converted; "energy_nj" is the flavor-6
+    ledger (case 0001.10/0001.11) or None where flavor 6 is unavailable —
+    never a fabricated zero; "pkg_idle_wakeups" / "interrupt_wakeups" are
+    the two counters kept apart (S8, casebook 0004); "diskio_bytes_read" /
+    "diskio_bytes_written" are cumulative bytes; "qos_cpu_ns" retains the
+    seven cumulative CPU ledgers needed by pmenergy's QoS-specific weights.
+    """
+    info = _raw_rusage_v6(pid) if HAS_V6 else _raw_rusage(pid)
+    if info is None:
+        return None
+    return {
+        "identity": (pid, info.ri_proc_start_abstime),
+        "cpu_user_ns": ticks_to_ns(info.ri_user_time),
+        "cpu_system_ns": ticks_to_ns(info.ri_system_time),
+        "qos_cpu_ns": {
+            "default": ticks_to_ns(info.ri_cpu_time_qos_default),
+            "maintenance": ticks_to_ns(info.ri_cpu_time_qos_maintenance),
+            "background": ticks_to_ns(info.ri_cpu_time_qos_background),
+            "utility": ticks_to_ns(info.ri_cpu_time_qos_utility),
+            "legacy": ticks_to_ns(info.ri_cpu_time_qos_legacy),
+            "user_initiated": ticks_to_ns(
+                info.ri_cpu_time_qos_user_initiated),
+            "user_interactive": ticks_to_ns(
+                info.ri_cpu_time_qos_user_interactive),
+        },
+        "energy_nj": info.ri_energy_nj if HAS_V6 else None,
+        "pkg_idle_wakeups": info.ri_pkg_idle_wkups,
+        "interrupt_wakeups": info.ri_interrupt_wkups,
+        "diskio_bytes_read": info.ri_diskio_bytesread,
+        "diskio_bytes_written": info.ri_diskio_byteswritten,
+    }
+
+
 def proc_identity(pid):
     """(pid, start_abstime_ticks) — the sample identity that survives pid reuse.
 

@@ -66,6 +66,9 @@ class TestSchema(unittest.TestCase):
         self.assertEqual(stream.getvalue().count("\n"), 1)
         self.assertEqual(json.loads(stream.getvalue())["scope"], "disk")
 
+    def test_human_external_text_replaces_terminal_controls(self):
+        self.assertEqual(cli.safe_text("ok\x1b[2J\nname"), "ok?[2J?name")
+
 
 class TestDiskContract(unittest.TestCase):
     def test_top_document_marks_non_root_visibility_partial(self):

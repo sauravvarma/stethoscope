@@ -106,5 +106,10 @@ def emit_json(value, stream=None):
     stream.flush()
 
 
+def safe_text(value):
+    """Replace terminal control characters in human-rendered external text."""
+    return "".join(char if char.isprintable() else "?" for char in str(value))
+
+
 def is_root():
     return os.geteuid() == 0

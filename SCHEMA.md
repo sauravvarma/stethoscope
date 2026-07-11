@@ -247,6 +247,171 @@ observed. If the process exits or its PID is reused, one final document has
 `1` when the run latched a leak candidate, `0` otherwise, `2` for a missing
 PID, and `3` when the process exists but is inaccessible.
 
+## `battery health`
+
+```json
+{
+  "schema": "stethoscope/1",
+  "scope": "battery",
+  "command": "health",
+  "partial": false,
+  "partial_reasons": [],
+  "present": true,
+  "probe_error": null,
+  "pmset_error": null,
+  "charge_pct": 72.0,
+  "state": "discharging",
+  "time_remaining": "3:07",
+  "cycle_count": 200,
+  "health_pct": 89.0,
+  "condition": "Normal",
+  "capacities": {"design_mah": 4382, "max_mah": 3900},
+  "temperature_c": 31.0,
+  "charging": false,
+  "external_connected": false,
+  "fully_charged": false,
+  "voltage_mv": 11585,
+  "current_ma": -1302,
+  "battery_flow_watts": -15.08367
+}
+```
+
+`present` is `true` for a battery, `false` for the supported desktop/no-battery
+state, and `null` when ioreg itself failed. Every measurement remains present
+as `null` when unavailable. `condition` is `Normal`, `Service Recommended`, or
+`null`; missing health evidence is never labeled normal. `battery_flow_watts`
+is signed voltage times current: negative while discharging and positive while
+charging. It is battery flow, not whole-system draw on AC.
+
+A pmset failure leaves its supplemental state/time fields null and marks the
+document partial with `pmset_unavailable`. An ioreg failure sets `probe_error`
+and exits `4`. Service-recommended health exits `1`; healthy, unknown, absent,
+or partial-without-a-finding exits `0`.
+
+## `battery top`
+
+```json
+{
+  "schema": "stethoscope/1",
+  "scope": "battery",
+  "command": "top",
+  "partial": true,
+  "partial_reasons": ["not_root"],
+  "pmenergy_source": "/usr/share/pmenergy/default.plist",
+  "system": {
+    "cpu_pct": 104.2,
+    "energy_rate_watts": 3.1,
+    "energy_score_per_s": 1.8,
+    "pkg_idle_wakeups_per_s": 20.0,
+    "interrupt_wakeups_per_s": 800.0
+  },
+  "processes": [
+    {
+      "pid": 1234,
+      "name": "worker",
+      "cpu_pct": 92.0,
+      "energy_rate_watts": 2.7,
+      "energy_score_per_s": 1.5,
+      "energy_share_pct": 83.3,
+      "pkg_idle_wakeups_per_s": 10.0,
+      "interrupt_wakeups_per_s": 400.0,
+      "diskio_bytes_read_per_s": 0.0,
+      "diskio_bytes_written_per_s": 4096.0
+    }
+  ]
+}
+```
+
+`energy_rate_watts` is a real flavor-6 energy-ledger delta and is null where
+unavailable. `energy_score_per_s` is Apple's unitless pmenergy-weighted ranking
+formula; it is never labeled watts. All score inputs are normalized to the
+sample interval, and CPU time uses the board's QoS-specific weights rather
+than treating background and interactive work as equivalent. Interrupt
+wakeups remain separate context and are not folded into the score. Non-root
+visibility and missing pmenergy coefficients mark the document partial. Exit
+code: `0`.
+
+## `battery drainers`
+
+```json
+{
+  "schema": "stethoscope/1",
+  "scope": "battery",
+  "command": "drainers",
+  "partial": false,
+  "partial_reasons": [],
+  "present": true,
+  "on_ac": false,
+  "probe_error": null,
+  "baseline_reset": false,
+  "reset_reason": null,
+  "charge_pct": 54.0,
+  "charge_drop": 8.0,
+  "elapsed_s": 3600.0,
+  "pmenergy_source": "/usr/share/pmenergy/default.plist",
+  "drainers": [
+    {
+      "pid": 1234,
+      "name": "worker",
+      "cpu_seconds_since": 120.0,
+      "pkg_idle_wakeups_since": 500,
+      "diskio_bytes_read_since": 1048576,
+      "diskio_bytes_written_since": 4096,
+      "energy_score_total": 124.2,
+      "energy_joules_since": 850.0
+    }
+  ],
+  "error": null
+}
+```
+
+`on_ac` is always present: `true`/`false` when known and `null` for absent
+hardware, probe failure, or unknown power state. The first invocation, AC
+state, unplug transition, changed discharge session, reboot, charge increase,
+or invalid baseline resets the baseline explicitly and returns
+`baseline_reset: true` with a stable `reset_reason`. The persisted baseline is
+schema-validated, boot/session/privilege-aware, atomically replaced, and never
+follows user-controlled symlinks under sudo.
+
+`energy_score_total` is cumulative and unitless; it is not the top command's
+per-second score. `energy_joules_since` is a cumulative flavor-6 delta. Missing
+power history, changed baseline visibility, non-root collection, or missing
+pmenergy coefficients marks the result partial. Essential battery, power
+state, boot-session, or baseline I/O failures set `error` and exit `4`.
+Supported first-run/reset/no-battery states exit `0`.
+
+## `battery inspect`
+
+```json
+{
+  "schema": "stethoscope/1",
+  "scope": "battery",
+  "command": "inspect",
+  "partial": false,
+  "partial_reasons": [],
+  "available": true,
+  "reason": null,
+  "observed_battery_flow_watts": -15.08,
+  "observed_state": "discharging",
+  "reconciliation_note": "powermetrics Energy Impact is unitless, not watts.",
+  "tasks": [
+    {
+      "pid": 0,
+      "name": "kernel_task",
+      "energy_impact_per_s": 2.0,
+      "energy_impact_total": 10.0
+    }
+  ]
+}
+```
+
+Powermetrics' per-second and sample-total Energy Impact values remain separate
+and unitless. PID `0` is `kernel_task`; PID `-1` is powermetrics'
+`DEAD_TASKS` aggregate for work that exited during the sample. `available`,
+`reason`, observed fields, note, and `tasks` are stable even on errors.
+Inspect requires root: no permission exits `3`; an unavailable or malformed
+powermetrics sample exits `4`; success exits `0`.
+
 ## `smart status [disk]`
 
 ```json
@@ -327,4 +492,5 @@ As a static command, SMART supports `--json` but rejects sampling flags.
 
 ## Changelog
 
-- `stethoscope/1`: stable common envelope and disk/CPU/memory/SMART contracts.
+- `stethoscope/1`: stable common envelope and disk/CPU/memory/battery/SMART
+  contracts.
