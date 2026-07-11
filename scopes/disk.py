@@ -31,6 +31,7 @@ No third-party dependencies — system Python 3 + ctypes only.
 
 import os
 import re
+import selectors
 import sys
 import time
 import signal
@@ -41,15 +42,74 @@ import subprocess
 # scope. Re-exported here so the TUI's `d.<name>` references keep working.
 # ---------------------------------------------------------------------------
 
-try:
-    from core import rusage                # via the stethoscope dispatcher
-except ImportError:                        # run directly: ./scopes/disk.py
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from core import rusage
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from core import cli, rusage, schema
 
 list_pids = rusage.list_pids
 proc_diskio = rusage.proc_diskio
 proc_name = rusage.proc_name
+
+PROBE_TIMEOUT = 15
+MAX_PROBE_OUTPUT_BYTES = 4 * 1024 * 1024
+_READ_CHUNK_BYTES = 64 * 1024
+
+
+class ProbeOutputError(subprocess.SubprocessError):
+    """A native probe exceeded its bounded captured-output contract."""
+
+
+def _run_bounded(argv, timeout=PROBE_TIMEOUT,
+                 max_output=MAX_PROBE_OUTPUT_BYTES):
+    """Run a fixed argv with deadline and bounded combined captured output."""
+    process = subprocess.Popen(
+        argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    selector = selectors.DefaultSelector()
+    stdout_chunks = []
+    stderr_chunks = []
+    total = 0
+    completed = False
+    try:
+        selector.register(process.stdout, selectors.EVENT_READ, stdout_chunks)
+        selector.register(process.stderr, selectors.EVENT_READ, stderr_chunks)
+        deadline = time.monotonic() + timeout
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            events = selector.select(remaining)
+            if not events:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            for key, _mask in events:
+                try:
+                    chunk = os.read(key.fd, _READ_CHUNK_BYTES)
+                except InterruptedError:
+                    continue
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                total += len(chunk)
+                if total > max_output:
+                    raise ProbeOutputError(
+                        "probe output exceeds %d bytes" % max_output)
+                key.data.append(chunk)
+        remaining = max(0.0, deadline - time.monotonic())
+        return_code = process.wait(timeout=remaining)
+        completed = True
+        return subprocess.CompletedProcess(
+            argv, return_code,
+            stdout=b"".join(stdout_chunks).decode("utf-8", "replace"),
+            stderr=b"".join(stderr_chunks).decode("utf-8", "replace"))
+    finally:
+        selector.close()
+        if not completed and process.poll() is None:
+            process.kill()
+        if not completed:
+            process.wait()
+        process.stdout.close()
+        process.stderr.close()
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +139,7 @@ RESET = "\033[0m"
 
 
 def warn_if_not_root():
-    if os.geteuid() != 0:
+    if not cli.is_root():
         sys.stderr.write(
             DIM + "note: not running as root — I/O for other users' processes is "
             "hidden and fs_usage will not run. Re-run with sudo for full coverage.\n"
@@ -124,7 +184,7 @@ def rank_io(prev, cur, dt):
         sys_dr += dr
         sys_dw += dw
         if dr > 0 or dw > 0:
-            rows.append((dr + dw, dr, dw, r, w, pid, proc_name(pid)))
+            rows.append((dr + dw, dr, dw, r, w, pid, proc_name(pid, key)))
     rows.sort(reverse=True)
     return rows, sys_dr, sys_dw
 
@@ -133,38 +193,86 @@ def rank_io(prev, cur, dt):
 # mode: top
 # ---------------------------------------------------------------------------
 
-def cmd_top(interval=1.0, limit=20):
+def _visibility():
+    partial = not cli.is_root()
+    return partial, ["not_root"] if partial else []
+
+
+def _top_document(rows, sys_dr, sys_dw, limit):
+    partial, reasons = _visibility()
+    return schema.document(
+        "disk", "top", partial=partial, partial_reasons=reasons,
+        system={"read_per_s": sys_dr, "write_per_s": sys_dw},
+        processes=[
+            {
+                "pid": pid,
+                "name": name,
+                "read_per_s": dr,
+                "write_per_s": dw,
+                "read_total": read_total,
+                "write_total": write_total,
+            }
+            for _, dr, dw, read_total, write_total, pid, name in rows[:limit]
+        ])
+
+
+def top_result(prev, cur, dt, limit, ranked=None):
+    """Return the structured disk-top result for one completed interval."""
+    rows, sys_dr, sys_dw = ranked or rank_io(prev, cur, dt)
+    return _top_document(rows, sys_dr, sys_dw, limit), cli.EXIT_OK
+
+
+def _top_frame(rows, sys_dr, sys_dw, interval, limit, styled=True):
+    clear = CLEAR if styled else ""
+    bold = BOLD if styled else ""
+    dim = DIM if styled else ""
+    reset = RESET if styled else ""
+    out = [clear]
+    out.append(bold + "stethoscope disk · per-process disk I/O · %s · refresh %.0fs" %
+               (time.strftime("%H:%M:%S"), interval) + reset)
+    out.append(dim + "system: read %s  write %s   (ctrl-c to quit)" %
+               (rate(sys_dr), rate(sys_dw)) + reset)
+    out.append("")
+    out.append(bold + "%7s  %-24s %10s %10s %10s %10s" %
+               ("PID", "COMMAND", "READ/s", "WRITE/s", "RD TOTAL", "WR TOTAL")
+               + reset)
+    if not rows:
+        out.append(dim + "  (no disk I/O this interval)" + reset)
+    for _, dr, dw, read_total, write_total, pid, name in rows[:limit]:
+        out.append("%7d  %-24s %10s %10s %10s %10s" %
+                   (pid, name[:24], rate(dr), rate(dw),
+                    human(read_total), human(write_total)))
+    return "\n".join(out) + "\n"
+
+
+def cmd_top(options):
     """Live per-process disk I/O, ranked by throughput."""
-    warn_if_not_root()
+    if not options.json:
+        warn_if_not_root()
     # Prime one sample so the first frame shows rates, not cumulative.
     prev = snapshot_diskio()
-    prev_t = time.time()
-    time.sleep(interval)
+    prev_t = time.monotonic()
+    started = prev_t
 
     while True:
+        time.sleep(options.interval)
         cur = snapshot_diskio()
-        now = time.time()
-        rows, sys_dr, sys_dw = rank_io(prev, cur, now - prev_t)
-        out = [CLEAR]
-        out.append(BOLD + "stethoscope disk · per-process disk I/O · %s · refresh %.0fs" %
-                   (time.strftime("%H:%M:%S"), interval) + RESET)
-        out.append(DIM + "system: read %s  write %s   (ctrl-c to quit)" %
-                   (rate(sys_dr), rate(sys_dw)) + RESET)
-        out.append("")
-        out.append(BOLD + "%7s  %-24s %10s %10s %10s %10s" %
-                   ("PID", "COMMAND", "READ/s", "WRITE/s", "RD TOTAL", "WR TOTAL")
-                   + RESET)
-        if not rows:
-            out.append(DIM + "  (no disk I/O this interval)" + RESET)
-        for _, dr, dw, r, w, pid, name in rows[:limit]:
-            out.append("%7d  %-24s %10s %10s %10s %10s" %
-                       (pid, name[:24], rate(dr), rate(dw), human(r), human(w)))
-        sys.stdout.write("\n".join(out) + "\n")
-        sys.stdout.flush()
-
-        prev = cur
-        prev_t = now
-        time.sleep(interval)
+        now = time.monotonic()
+        ranked = rank_io(prev, cur, now - prev_t)
+        rows, sys_dr, sys_dw = ranked
+        document, exit_code = top_result(
+            prev, cur, now - prev_t, options.limit, ranked=ranked)
+        if options.json:
+            cli.emit_json(document)
+        else:
+            sys.stdout.write(_top_frame(
+                rows, sys_dr, sys_dw, options.interval, options.limit,
+                styled=sys.stdout.isatty()))
+            sys.stdout.flush()
+        if options.once or (
+                options.duration is not None and now - started >= options.duration):
+            return exit_code
+        prev, prev_t = cur, now
 
 
 # ---------------------------------------------------------------------------
@@ -173,10 +281,10 @@ def cmd_top(interval=1.0, limit=20):
 
 def cmd_inspect(pid):
     """Live syscall-level file I/O for one pid, plus cumulative totals."""
-    if os.geteuid() != 0:
+    if not cli.is_root():
         sys.stderr.write("inspect needs root (fs_usage). Re-run: sudo %s inspect %d\n"
                          % (sys.argv[0], pid))
-        return 1
+        return cli.EXIT_PERMISSION
 
     name = proc_name(pid)
     io = proc_diskio(pid)
@@ -198,7 +306,7 @@ def cmd_inspect(pid):
         pass
     finally:
         proc.terminate()
-    return 0
+    return cli.EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +322,7 @@ def open_files(pid, disk_only=True):
     Shared by cmd_holds and the TUI's holds popup.
     """
     cmd = ["/usr/sbin/lsof", "-nP", "-p", str(pid)]
-    out = subprocess.run(cmd, capture_output=True, text=True, timeout=15).stdout
+    out = _run_bounded(cmd).stdout
     items = []
     for ln in out.splitlines()[1:]:   # skip header
         parts = ln.split(None, 8)
@@ -227,27 +335,56 @@ def open_files(pid, disk_only=True):
     return items
 
 
-def cmd_holds(pid):
+def cmd_holds(pid, options):
     """Show open file descriptors (files/dirs the process is holding)."""
-    name = proc_name(pid)
+    document, exit_code = holds_result(pid)
+    if options.json:
+        cli.emit_json(document)
+        return exit_code
+    if document["error"]:
+        sys.stderr.write("%s\n" % document["error"])
+        return exit_code
+
+    name = document["name"]
+    io = document["cumulative"]
+    items = [(item["reason"], item["type"], item["path"])
+             for item in document["holds"]]
     print(BOLD + "stethoscope disk holds · pid %d (%s)" % (pid, name) + RESET)
-    io = proc_diskio(pid)
     if io:
         print(DIM + "cumulative disk I/O: read %s / written %s"
-              % (human(io[0]), human(io[1])) + RESET)
+              % (human(io["read"]), human(io["write"])) + RESET)
     print()
-    try:
-        items = open_files(pid)
-    except Exception as e:
-        print("lsof failed: %s" % e)
-        return 1
     if not items:
         print(DIM + "(no on-disk files held, or permission denied — try sudo)" + RESET)
-        return 0
+        return exit_code
     print(BOLD + "%-18s %-5s %s" % ("HOLD", "TYPE", "PATH") + RESET)
-    for reason, typ, name in items:
-        print("%-18s %-5s %s" % (reason, typ, name))
-    return 0
+    for reason, kind, path in items:
+        print("%-18s %-5s %s" % (reason, kind, path))
+    return exit_code
+
+
+def holds_result(pid):
+    """Return the stable disk-holds document and command exit code."""
+    name = proc_name(pid)
+    io = proc_diskio(pid)
+    try:
+        items = open_files(pid)
+    except (OSError, subprocess.SubprocessError) as exc:
+        partial, reasons = _visibility()
+        return schema.document(
+            "disk", "holds", partial=partial, partial_reasons=reasons,
+            pid=pid, name=name, cumulative=None, holds=[],
+            error="lsof failed: %s" % exc), cli.EXIT_ERROR
+
+    partial, reasons = _visibility()
+    return schema.document(
+        "disk", "holds", partial=partial, partial_reasons=reasons,
+        pid=pid,
+        name=name,
+        cumulative={"read": io[0], "write": io[1]} if io else None,
+        holds=[{"reason": reason, "type": kind, "path": path}
+               for reason, kind, path in items],
+        error=None), cli.EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +393,7 @@ def cmd_holds(pid):
 
 def _mount_table():
     """Parse `mount` into a list of (device, mountpoint)."""
-    out = subprocess.run(["/sbin/mount"], capture_output=True, text=True).stdout
+    out = _run_bounded(["/sbin/mount"]).stdout
     pairs = []
     for ln in out.splitlines():
         # form: "/dev/disk6s2 on /Volumes/X9 Pro (exfat, ...)"
@@ -286,7 +423,7 @@ def resolve_volume(arg):
             targets.append((dev, mp))
         elif dev == dev_arg:                               # exact device node
             targets.append((dev, mp))
-        elif arg.startswith("disk") and dev.startswith(dev_arg):  # whole disk -> all slices
+        elif arg.startswith("disk") and dev.startswith(dev_arg + "s"):  # whole disk -> slices
             targets.append((dev, mp))
     # de-dup preserving order
     seen = set()
@@ -323,8 +460,7 @@ def collect_holders(targets):
     procs = {}
     for dev, mp in targets:
         # Passing the mount point makes lsof list every open file on that filesystem.
-        res = subprocess.run(["/usr/sbin/lsof", "-nP", mp],
-                             capture_output=True, text=True)
+        res = _run_bounded(["/usr/sbin/lsof", "-nP", mp])
         for ln in res.stdout.splitlines()[1:]:   # skip header
             parts = ln.split(None, 8)
             if len(parts) < 9:
@@ -339,45 +475,70 @@ def collect_holders(targets):
     return procs
 
 
-def cmd_busy(arg):
-    """Reverse lookup: which processes hold files open on a volume/disk."""
-    targets = resolve_volume(arg)
-    if not targets:
-        sys.stderr.write("no mounted volume/device matches %r.\n"
-                         "mounted volumes: %s\n"
-                         % (arg, ", ".join(sorted(mp for _, mp in _mount_table()
-                                                  if mp.startswith("/Volumes/")))))
-        return 2
+def _busy_holder(pid, process):
+    reasons = {}
+    for reason, _ in process["holds"]:
+        reasons[reason] = reasons.get(reason, 0) + 1
+    io = proc_diskio(pid)
+    return {
+        "pid": pid,
+        "name": process["name"],
+        "user": process["user"],
+        "reasons": reasons,
+        "paths": [path for _, path in process["holds"]],
+        "io": {"read": io[0], "write": io[1]} if io else None,
+    }
 
-    if os.geteuid() != 0:
+
+def cmd_busy(arg, options):
+    """Reverse lookup: which processes hold files open on a volume/disk."""
+    document, exit_code = busy_result(arg)
+    if options.json:
+        cli.emit_json(document)
+        return exit_code
+    if document["error"]:
+        if exit_code == cli.EXIT_USAGE:
+            try:
+                mounted = ", ".join(sorted(
+                    mp for _, mp in _mount_table()
+                    if mp.startswith("/Volumes/")))
+            except (OSError, subprocess.SubprocessError):
+                mounted = "(mount probe unavailable)"
+            sys.stderr.write("no mounted volume/device matches %r.\n"
+                             "mounted volumes: %s\n" % (arg, mounted))
+        else:
+            sys.stderr.write("%s\n" % document["error"])
+        return exit_code
+
+    if not cli.is_root():
         sys.stderr.write(DIM + "note: not root — holders owned by other users / system "
                          "daemons (mds, fseventsd) are hidden. Re-run with sudo for the "
                          "full picture.\n" + RESET)
 
+    targets = [(item["device"], item["mount"]) for item in document["targets"]]
+    holders = document["holders"]
     label = ", ".join("%s (%s)" % (mp, dev) for dev, mp in targets)
     print(BOLD + "stethoscope disk busy · %s" % label + RESET)
 
-    procs = collect_holders(targets)
-    if not procs:
+    if not holders:
         print(DIM + "  no processes are holding this volume — it should eject cleanly."
               + RESET)
-        return 0
+        return exit_code
 
-    print(DIM + "%d process(es) holding it open:\n" % len(procs) + RESET)
-    for pid in sorted(procs, key=lambda p: -len(procs[p]["holds"])):
-        p = procs[pid]
-        reasons = {}
-        for reason, _ in p["holds"]:
-            reasons[reason] = reasons.get(reason, 0) + 1
+    print(DIM + "%d process(es) holding it open:\n" % len(holders) + RESET)
+    for holder in holders:
+        pid = holder["pid"]
+        reasons = holder["reasons"]
         reason_str = ", ".join("%s×%d" % (r, c) if c > 1 else r
                                for r, c in sorted(reasons.items(), key=lambda x: -x[1]))
-        io = proc_diskio(pid)
-        io_str = ("  ·  live I/O: read %s / written %s" % (human(io[0]), human(io[1]))) if io else ""
-        print(BOLD + "  pid %-6d %-20s" % (pid, p["name"]) + RESET
-              + DIM + " user=%s%s" % (p["user"], io_str) + RESET)
+        io = holder["io"]
+        io_str = ("  ·  live I/O: read %s / written %s" %
+                  (human(io["read"]), human(io["write"]))) if io else ""
+        print(BOLD + "  pid %-6d %-20s" % (pid, holder["name"]) + RESET
+              + DIM + " user=%s%s" % (holder["user"], io_str) + RESET)
         print("    holding: %s" % reason_str)
         # show up to 3 example paths (skip bare mount-point/dir noise)
-        examples = [n for _, n in p["holds"]][:3]
+        examples = holder["paths"][:3]
         for ex in examples:
             print(DIM + "      %s" % ex + RESET)
         print()
@@ -388,7 +549,48 @@ def cmd_busy(arg):
     print(DIM + "to force-eject: diskutil unmount force '%s'   (or 'diskutil unmountDisk %s')"
           % (targets[0][1], whole_disk) + RESET)
     print(DIM + "to release a holder, quit its app or:  kill <pid>" + RESET)
-    return 0
+    return exit_code
+
+
+def busy_result(arg):
+    """Return the stable disk-busy document and command exit code."""
+    partial, reasons = _visibility()
+    try:
+        targets = resolve_volume(arg)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return schema.document(
+            "disk", "busy", partial=True,
+            partial_reasons=reasons + ["mount_probe_failed"],
+            target=arg, targets=[], holders=[],
+            error="mount probe failed: %s" % exc), cli.EXIT_ERROR
+    if not targets:
+        return schema.document(
+            "disk", "busy", partial=partial, partial_reasons=reasons,
+            target=arg, targets=[], holders=[],
+            error="no mounted volume/device matches %r" % arg), cli.EXIT_USAGE
+
+    try:
+        procs = collect_holders(targets)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return schema.document(
+            "disk", "busy", partial=True,
+            partial_reasons=reasons + ["lsof_probe_failed"],
+            target=arg,
+            targets=[{"device": device, "mount": mount}
+                     for device, mount in targets],
+            holders=[], error="lsof failed: %s" % exc), cli.EXIT_ERROR
+    document = schema.document(
+        "disk", "busy", partial=partial, partial_reasons=reasons,
+        target=arg,
+        targets=[{"device": device, "mount": mount}
+                 for device, mount in targets],
+        holders=[
+            _busy_holder(pid, procs[pid])
+            for pid in sorted(
+                procs, key=lambda value: -len(procs[value]["holds"]))
+        ],
+        error=None)
+    return document, cli.EXIT_FINDINGS if procs else cli.EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -397,14 +599,16 @@ def cmd_busy(arg):
 
 USAGE = """stethoscope disk — per-process disk I/O visibility for macOS
 
-  disk [top] [--interval N] [--limit N]   who is doing disk I/O now (default)
-  disk inspect <pid>                       why — live syscall trace (needs sudo)
-  disk holds <pid>                         what files a process holds open
-  disk busy <volume|device>                which pids pin a disk (reverse lookup)
-  disk tui                                 full-screen interactive view (sudo -E)
+  disk [top] [--interval N] [--limit N] [--once | --duration N] [--json]
+  disk inspect <pid>                      live syscall trace (human, needs sudo)
+  disk holds <pid> [--json]               files the process holds open
+  disk busy <volume|device> [--json]      pids pinning a disk
+  disk tui                                full-screen interactive view (non-root by default)
 
 Run under sudo to see all processes / all holders:  sudo ./stethoscope disk top
 Examples:  sudo ./stethoscope disk busy "/Volumes/X9 Pro"    sudo ./stethoscope disk busy disk6
+
+Exit codes: 0 clean · 1 findings · 2 usage · 3 permission · 4 probe error
 """
 
 
@@ -413,40 +617,39 @@ def main(argv):
     args = argv[1:]
     if args and args[0] in ("-h", "--help"):
         print(USAGE)
-        return 0
+        return cli.EXIT_OK
 
     mode = "top"
     if args and not args[0].startswith("-"):
         mode = args.pop(0)
 
-    if mode == "top":
-        interval, limit = 1.0, 20
-        while args:
-            a = args.pop(0)
-            if a == "--interval":
-                interval = float(args.pop(0))
-            elif a == "--limit":
-                limit = int(args.pop(0))
-            else:
-                sys.stderr.write("unknown option: %s\n" % a)
-                return 2
-        cmd_top(interval, limit)
-        return 0
-    if mode in ("inspect", "holds"):
-        if not args:
-            sys.stderr.write("%s needs a pid\n" % mode)
-            return 2
-        pid = int(args[0])
-        return cmd_inspect(pid) if mode == "inspect" else cmd_holds(pid)
-    if mode == "busy":
-        if not args:
-            sys.stderr.write("busy needs a volume path, name, or device "
-                             "(e.g. '/Volumes/X9 Pro', 'X9 Pro', disk6)\n")
-            return 2
-        return cmd_busy(args[0])
+    try:
+        options = cli.parse_options(args)
+        if mode == "top":
+            cli.require_positionals(options, mode, 0)
+            return cmd_top(options)
+        if mode in ("inspect", "holds"):
+            cli.require_options(
+                options, mode, set() if mode == "inspect" else {"json"})
+            pid_arg = cli.require_positionals(options, mode, 1)[0]
+            try:
+                pid = int(pid_arg)
+            except ValueError:
+                raise cli.OptionsError("%s: not a pid: %r" % (mode, pid_arg))
+            if pid <= 0:
+                raise cli.OptionsError("%s: pid must be > 0" % mode)
+            return cmd_inspect(pid) if mode == "inspect" else cmd_holds(
+                pid, options)
+        if mode == "busy":
+            cli.require_options(options, mode, {"json"})
+            target = cli.require_positionals(options, mode, 1)[0]
+            return cmd_busy(target, options)
+    except cli.OptionsError as exc:
+        sys.stderr.write("%s\n" % exc)
+        return cli.EXIT_USAGE
 
     sys.stderr.write("unknown mode: %s\n\n%s" % (mode, USAGE))
-    return 2
+    return cli.EXIT_USAGE
 
 
 if __name__ == "__main__":

@@ -1,0 +1,19 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show Python
+        run: python3 --version
+      - name: Run unit tests
+        run: python3 -m unittest discover tests
+      - name: Validate probe contracts on this machine
+        run: python3 -m core.validate
+      - name: Check casebook invariants and index
+        run: python3 casebook/casebook.py check index

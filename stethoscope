@@ -10,63 +10,109 @@ reusable data layer in scopes/<name>.py.
 
   stethoscope disk <cmd>      per-process disk I/O, holds, eject blockers
   stethoscope cpu <cmd>       per-process CPU, live power, lifetime duty
-  (planned: memory, battery, smart — see the repo roadmap)
+  stethoscope memory <cmd>    footprint, pressure, leak candidates
+  stethoscope battery <cmd>   health, energy attribution, unplug drainers
+  stethoscope smart [disk]    drive health, wear, pre-failure warnings
+  stethoscope checkup         one-shot full-body examination
+  stethoscope mcp             expose read-only scopes as MCP tools over stdio
+  stethoscope triage          ranked anomaly diagnosis
+  stethoscope anomaly <cmd>   deviation, leaks, runaway, or triage
+  stethoscope record          append live vitals to a local JSONL corpus
+  stethoscope history [scope] summarize recorded vitals and baselines
+  stethoscope tui             unified live terminal interface
 
 No third-party dependencies — system Python 3 only.
 """
 
+import importlib
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+
+from core import cli
 
 USAGE = """stethoscope — vital signs for your Mac
 
 usage: stethoscope <scope> [command] [args]
 
 scopes:
+  tui     unified live view: disk, cpu, memory, battery, drives
   disk    per-process disk I/O visibility
             top             who is doing disk I/O now (default)
             inspect <pid>   why — live syscall trace (sudo)
             holds <pid>     what files a process holds open
             busy <volume>   which pids pin a disk ("why won't it eject")
-            tui             full-screen interactive view (sudo -E)
+            tui             full-screen interactive view (non-root by default)
   cpu     per-process CPU visibility
             top             who is burning CPU now (default) — %CPU, live
                             watts, lifetime CPU time and duty
-
-planned scopes: memory, battery, smart  (see roadmap)
+            wakeups         who is waking the CPU (pkg-idle and interrupts)
+  memory  per-process footprint and system pressure
+            top             who is using memory now (default)
+            watch <pid>     footprint slope and latched leak candidate
+  battery power-source health and process energy
+            health          charge, capacity, cycles, condition (default)
+            top             live watts and unitless Energy Impact ranking
+            drainers        cumulative impact since the current unplug
+            inspect         richer powermetrics detail (sudo)
+  smart   physical-drive health and endurance
+            status [disk]   SMART verdict, wear, life, and warnings
+  checkup one-shot full-body exam and canonical diagnosis
+  mcp     read-only Model Context Protocol server (stdio)
+  triage  one-shot baseline deviation, leaks, runaways, and point health
+  anomaly one-shot detector: deviation, leaks, runaway, or triage
+  record  foreground sampler (launchd-friendly; default interval 60s)
+  history [scope] [--since WHEN]
+          retrospective summary; use "history baseline [scope]" for percentiles
 
 examples:
   sudo ./stethoscope disk top
   sudo ./stethoscope cpu top
+  ./stethoscope battery health
+  ./stethoscope smart
   sudo ./stethoscope disk busy "/Volumes/X9 Pro"
-  sudo -E ./stethoscope disk tui
+  ./stethoscope disk tui
+  ./stethoscope tui
 """
+
+
+SCOPES = {
+    "tui": {"module": "scopes.tui"},
+    "disk": {"module": "scopes.disk", "tui": "scopes.disk_tui"},
+    "cpu": {"module": "scopes.cpu"},
+    "memory": {"module": "scopes.memory"},
+    "battery": {"module": "scopes.battery"},
+    "smart": {"module": "scopes.smart"},
+    "checkup": {"module": "scopes.checkup"},
+    "mcp": {"module": "scopes.mcp_server"},
+    "triage": {"module": "scopes.anomaly"},
+    "anomaly": {"module": "scopes.anomaly"},
+    "record": {"module": "scopes.record"},
+    "history": {"module": "scopes.record"},
+}
+
+
+def _load(module_name):
+    return importlib.import_module(module_name)
 
 
 def main(argv):
     args = argv[1:]
     if not args or args[0] in ("-h", "--help", "help"):
         print(USAGE)
-        return 0
+        return cli.EXIT_OK
 
     scope = args.pop(0)
-
-    if scope == "disk":
-        if args and args[0] == "tui":
-            from scopes import disk_tui
-            return disk_tui.main()
-        from scopes import disk
-        # disk.main expects [prog, mode, ...]; rebrand prog for its messages
-        return disk.main(["stethoscope disk"] + args)
-
-    if scope == "cpu":
-        from scopes import cpu
-        return cpu.main(["stethoscope cpu"] + args)
+    spec = SCOPES.get(scope)
+    if spec is not None:
+        if args and args[0] == "tui" and spec.get("tui"):
+            return _load(spec["tui"]).main(
+                ["stethoscope %s tui" % scope] + args[1:])
+        return _load(spec["module"]).main(["stethoscope %s" % scope] + args)
 
     sys.stderr.write("unknown scope: %s\n\n%s" % (scope, USAGE))
-    return 2
+    return cli.EXIT_USAGE
 
 
 if __name__ == "__main__":

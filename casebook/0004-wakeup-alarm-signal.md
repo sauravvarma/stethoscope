@@ -82,3 +82,35 @@ Remaining open: whether pkg-idle ever fires on this hardware (worth one
 `powermetrics` cross-check when the inspect tier lands); if it never
 does, `scopes/cpu.py` may treat pkg-idle as Intel-era vestige and lead
 with interrupt wakeups.
+
+## 0004.8 · 2026-07-11 · follow-up — cpu wakeups ships both vitals, kept apart end to end
+
+`core/rusage.py`'s `proc_cpu_sample` now returns cumulative
+`ri_pkg_idle_wkups` / `ri_interrupt_wkups` alongside CPU time and energy
+(no new struct — same V4/V6 read `scopes/cpu.py` already made). `scopes/cpu.py`
+gained a `wakeups` command, ranked by `total_wakeups_per_s`
+(`pkg_idle_wakeups_per_s + interrupt_wakeups_per_s`, display/ranking-only —
+0004.5 stands: nothing here feeds a detector a summed number). Every row and
+the system totals carry `pkg_idle_wakeups_per_s` and
+`interrupt_wakeups_per_s` as separate fields, matching ARCHITECTURE.md §4's
+vitals directly, so the diagnosis layer this case anticipates can still
+baseline each counter against its own history when it lands.
+
+Measured against a fixed known-chatty target rather than a generic sample
+(closing 0004.6(a) more precisely): 15 s at 1 s cadence against this
+session's own `copilot` CLI process (sustained 30–195% CPU from concurrent
+tool calls) read `pkg_idle_wakeups_per_s` mostly 0 but occasionally 2–4/s,
+while `interrupt_wakeups_per_s` ran 30–122/s every sample — refining 0004.7's
+system-wide "pkg-idle is always exactly 0" into "pkg-idle is near-zero and
+intermittent even on a genuinely chatty process; interrupt still carries the
+dominant, always-present signal." Reinforces rather than reverses 0004.5:
+pkg-idle is not dead-flat everywhere, so an either-counter alarm still has
+occasional pkg-idle signal to threshold against, but interrupt remains the
+counter a detector cannot afford to ignore.
+
+Fixed in the same change, caught in review (Copilot #40): an earlier
+draft's human WAKE/s column rendered the pkg-idle-only rate while `wakeups`
+ranked by the summed total — the column and the sort order disagreed. The
+shipped table's WAKE/s is `total_wakeups_per_s`, with PKG/s and INTR/s as
+adjacent columns so a reader can see why a row ranked where it did without
+guessing which counter WAKE/s meant.

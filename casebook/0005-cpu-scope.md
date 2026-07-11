@@ -90,3 +90,25 @@ rather than new design debt: no one-shot / `--samples` mode and no
 and strip ANSI), COMMAND column truncation with no path option (it
 borrowed `disk holds` for name resolution), no sort-by-lifetime option,
 and no per-pid drill-down for the user/sys split (v0.2 wakeup vitals).
+
+## 0005.9 · 2026-07-11 · follow-up — the v0.5 agent-contract gap closes; wakeups joins top
+
+0005.8's residual gap is closed: `cpu top` now takes `core/cli.py`'s shared
+`--json` / `--once` / `--duration N` / `--interval N` / `--limit N`
+surface (the same contract `disk top` already carries, ARCHITECTURE.md's
+agent-contract line), so the 0005.8 agent's background-kill-and-strip-ANSI
+workaround is no longer needed — one `--json --once` call returns exactly
+one schema-versioned document. Every row now also carries the v0.2 wakeup
+vitals this case's own follow-up list named as missing:
+`pkg_idle_wakeups_per_s` and `interrupt_wakeups_per_s` (case 0004), plus a
+`total_wakeups_per_s` for ranking. A new `cpu wakeups` command ranks by that
+total — case 0004's "who is waking the CPU" question, sharing `cpu top`'s
+data layer (`core/rusage.py`'s `proc_cpu_sample`, extended in place rather
+than duplicated) and rendering the same row shape sorted differently, so
+0005.6's %CPU/duty/watts view and 0004's wakeup view stay one coherent
+surface instead of two. Non-root visibility is now marked explicitly:
+`--json` output sets `partial: true` / `partial_reasons: ["not_root"]`
+rather than only warning on stderr, matching `disk`'s contract. Still open
+per 0005.8: COMMAND column truncation with no path option, and no
+sort-by-lifetime option on `top` — neither is a wakeup- or agent-contract
+gap, so both stay out of this case's scope.
