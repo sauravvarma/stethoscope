@@ -83,3 +83,33 @@ The calibration corpus is only as good as its coverage: if the background
 sampler (build-order step 2) slips, baselines revert to crisis-biased
 surface-time samples (A5) and the per-week FP claim silently degrades.
 Reopen if v0.6 ships detectors before the sampler has ≥ 2 weeks of data.
+
+## 0002.10 · 2026-07-11 · follow-up — cold-start floors and honest ordinal evidence
+
+The first shipped diagnosis pass narrows the claim made in 0002.8: until replay
+calibration has enough representative normal traces, `score` and `confidence`
+are explicitly ordinal, never probabilities or false-positive-rate claims.
+Robust bands use metric-specific absolute and relative floors rather than
+discarding every narrow band. In hermetic regression data, five near-identical
+6.15 GB memory readings tolerate about 1 MB of noise, while eight zero CPU
+readings followed by 40% CPU still classify as critical. Online least-squares
+leak evidence is bounded, requires five samples over 30 minutes and at least
+1 MiB/min growth, and rejects recent plateaus and frequent drops. This preserves
+0002.8's raw-corpus/replay direction while rejecting both the old razor-thin
+percentile threshold and the opposite treatment of making all zero baselines
+blind.
+
+## 0002.11 · 2026-07-11 · failure — learned pathology disabled the guardrail
+
+Initial implementation switched entirely to a learned process band after five
+samples. A process recorded at 100% CPU twenty times could therefore make 100%
+look normal and suppress the static 95% critical threshold—the baseline
+poisoning failure §6 explicitly forbids. Static CPU and per-counter wakeup
+thresholds now remain floors after history matures; learned and static evidence
+are evaluated independently and the stronger result wins.
+
+Small samples also no longer let one extreme point dominate p90/p99: before 20
+values, robust bands use median/MAD plus absolute/relative floors only.
+Quantiles join once the sample is large enough to represent a distribution.
+Threshold crossings are inclusive, extreme finite scores clamp before integer
+conversion, and the current footprint endpoint participates in leak evidence.

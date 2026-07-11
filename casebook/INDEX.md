@@ -5,7 +5,7 @@
 | Case | Title | Status | Opened | Last entry | Entries |
 |---|---|---|---|---|---|
 | [0001](0001-energy-attribution.md) | per-process energy attribution | treated | 2026-07-10 | 2026-07-10 | 11 |
-| [0002](0002-statistical-calibration.md) | statistical evidence and calibration | treated | 2026-07-10 | 2026-07-10 | 9 |
+| [0002](0002-statistical-calibration.md) | statistical evidence and calibration | treated | 2026-07-10 | 2026-07-11 | 11 |
 | [0003](0003-rusage-probe-contract.md) | the rusage probe contract | treated | 2026-07-10 | 2026-07-11 | 8 |
 | [0004](0004-wakeup-alarm-signal.md) | which wakeup counter alarms wakeup-storm | treated | 2026-07-10 | 2026-07-11 | 8 |
 | [0005](0005-cpu-scope.md) | cpu scope — who is burning CPU now | treated | 2026-07-10 | 2026-07-11 | 9 |
@@ -14,3 +14,4 @@
 | [0008](0008-smart-scope.md) | smart scope | treated | 2026-07-11 | 2026-07-11 | 10 |
 | [0009](0009-battery-scope.md) | battery scope — health, energy top, unplug drainers | treated | 2026-07-11 | 2026-07-11 | 14 |
 | [0010](0010-recording-baselines.md) | recording, history, and hourly baselines | treated | 2026-07-11 | 2026-07-11 | 11 |
+| [0011](0011-diagnosis-triage.md) | diagnosis and triage composition | treated | 2026-07-11 | 2026-07-11 | 7 |

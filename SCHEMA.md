@@ -490,6 +490,142 @@ or warning, `0` when no finding is present, and `2` for an unknown requested
 disk or malformed invocation.
 As a static command, SMART supports `--json` but rejects sampling flags.
 
+## `triage` and `anomaly`
+
+`triage` is the direct one-shot diagnosis command. `anomaly` requires exactly
+one mode: `deviation`, `leaks`, `runaway`, or `triage`. Both accept `--json`,
+`--interval N`, `--limit N`, `--since WHEN`, and `--store DIR`; they reject
+`--once`, `--duration`, unknown modes, and extra positionals. Defaults are a
+1-second completed live interval, limit 20, history since 24 hours ago, and the
+canonical `baseline-raw/1` store. Interval is capped at 60 seconds and limit at
+256.
+
+All modes use the same stable result fields:
+
+```json
+{
+  "schema": "stethoscope/1",
+  "scope": "triage",
+  "command": "triage",
+  "partial": true,
+  "partial_reasons": ["not_root"],
+  "mode": "triage",
+  "overall": "warn",
+  "findings": [
+    {
+      "code": "process_footprint_leak",
+      "severity": "warn",
+      "area": "memory",
+      "detector": "leak",
+      "message": "worker (pid 500) has sustained footprint growth",
+      "score": 47,
+      "confidence": "moderate",
+      "drill_down": [
+        "stethoscope memory watch 500",
+        "stethoscope memory top"
+      ],
+      "evidence": {
+        "pid": 500,
+        "start_ticks": 900,
+        "sample_count": 6,
+        "span_seconds": 3600.0,
+        "slope_mib_per_min": 7.0,
+        "plateaued": false
+      }
+    }
+  ],
+  "notes": [],
+  "history": {
+    "available": true,
+    "error": null,
+    "raw_schema": "baseline-raw/1",
+    "store": "/Users/example/.stethoscope/baseline-raw",
+    "since": 1783683000.0,
+    "record_count": 120,
+    "matching_context_records": 8,
+    "cold": false,
+    "replay_errors": [],
+    "replay_error_count": 0,
+    "replay_errors_omitted": 0,
+    "files": ["2026-07-11.jsonl"],
+    "source_partial_reasons": ["not_root"],
+    "source_partial_reasons_omitted": 0,
+    "trend_invalid_count": 0,
+    "sampler_baseline_resets": 0
+  },
+  "current": {
+    "recorded_at": 1783769400.0,
+    "interval_s": 1.01,
+    "context": {},
+    "metrics": [],
+    "processes": [],
+    "points": {
+      "memory": {"pressure": "warn"},
+      "battery": {"present": false},
+      "smart": {"drives": []}
+    }
+  },
+  "error": null
+}
+```
+
+For `anomaly`, `scope` is `anomaly` and `command`/`mode` name the selected
+mode. For direct `triage`, both are `triage`. `current.points` is populated by
+triage and is `null` in individual detector modes. `current` is `null` if the
+live interval could not be collected. Success, usage-error JSON, and runtime
+error JSON retain `overall`, `findings`, `notes`, `history`, `current`, and
+`error`.
+
+Every finding has a stable `code`, `severity` (`info`, `warn`, or `critical`),
+`area`, `detector`, human `message`, integer ordinal `score` from 0 through 100,
+ordinal `confidence` (`low`, `moderate`, or `high`), an array of
+`drill_down` commands, and detector-specific `evidence`. Scores and confidence
+are not probabilities. Findings sort by severity, score, area, detector, code,
+and message; `overall` is the worst severity, or `ok` when there are no
+findings.
+
+System deviation uses only selected system metrics and the exact current
+hour/timezone/privilege/power-state context. Degenerate robust bands are widened
+with metric-specific absolute and relative floors: small memory noise remains
+clean while a stable-zero CPU or wakeup baseline still detects a material
+spike. Signed battery flow is excluded. Process deviation is not emitted, so it
+cannot duplicate runaway findings.
+
+Leak history retains only current `(pid, start_ticks)` identities. A finding
+requires at least five samples spanning at least 30 minutes, mostly rising
+footprint, slope of at least 1 MiB/min, no excessive drops, and no recent
+plateau. Empty history does not trigger a short live fallback. Runaway compares
+CPU, package-idle wakeups, and interrupt wakeups independently with each
+normalized process name's contextual baseline when mature, otherwise with
+explicit static thresholds. Static thresholds remain an anti-poisoning
+backstop even after history matures, so a process cannot normalize a
+persistently pegged CPU or wakeup storm. Current and historical stethoscope
+sampler identities are excluded from process baselines and findings; dedicated
+system sampler metrics still monitor tool overhead. The two wakeup counters are
+never summed for an alarm.
+
+Triage additionally classifies kernel memory pressure, battery service
+condition, and SMART warnings. Unknown pressure is an info finding and partial,
+not healthy. No battery and no physical drives are supported states.
+`smartctl` absence is partial but optional; actual live/replay/probe failures
+set `error` and exit `4`.
+
+History is consumed through an incremental JSONL scan. Corruption preserves up
+to 1024 `replay_errors` and exact `replay_error_count`/
+`replay_errors_omitted`, marks the document partial, and exits `4` even if
+findings exist. Source partial reasons propagate, but `not_root` or another
+visibility limitation alone does not make the command fail.
+If history cannot be opened, `history.available` is false and `history.error`
+explains why; static runaway and independent point findings are still returned,
+while the command exits `4`. `trend_invalid_count` reports ignored
+out-of-order timestamps. `sampler_baseline_resets` reports conservative
+normalized-name resets made when replay discovers that an earlier contributor
+was a recorder process.
+
+Exit is `1` only for a critical finding, `0` for clean/info/warn, `2` for
+invalid invocation (including invalid `--since`), and `4` for live collection,
+replay, store, or required probe failure.
+
 ## Recording corpus: `baseline-raw/1`
 
 `stethoscope record` appends strict JSON objects (not `stethoscope/1`
@@ -609,5 +745,5 @@ cold, and exit 0.
 ## Changelog
 
 - `stethoscope/1`: stable common envelope and
-  disk/CPU/memory/battery/SMART/record/history contracts.
+  disk/CPU/memory/battery/SMART/record/history/triage/anomaly contracts.
 - `baseline-raw/1`: append-only daily recording corpus.
