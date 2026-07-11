@@ -706,6 +706,15 @@ class TestCmdHealthExitCodes(unittest.TestCase):
         self.assertTrue(doc["partial"])
         self.assertIn("pmset_unavailable", doc["partial_reasons"])
 
+    def test_public_health_result_matches_cli_exit_semantics(self):
+        health = battery._empty_health(True, None)
+        health["condition"] = "Service Recommended"
+        with mock.patch.object(
+                battery, "battery_health", return_value=health):
+            document, exit_code = battery.health_result()
+        self.assertEqual(document["condition"], "Service Recommended")
+        self.assertEqual(exit_code, cli.EXIT_FINDINGS)
+
 
 # ---------------------------------------------------------------------------
 # scopes.battery — top: rate-unit rows, V6 watts present/absent, identity
@@ -836,6 +845,30 @@ class TestRankTop(unittest.TestCase):
 
 
 class TestTopDocumentAndCLI(unittest.TestCase):
+    def test_public_top_result_matches_ranked_document(self):
+        previous = {(7, 70): _sample(identity=(7, 70))}
+        current = {
+            (7, 70): _sample(
+                cpu_user_ns=100_000_000, identity=(7, 70)),
+        }
+        model = {
+            "coefficients": _COEFFS,
+            "source": "test-model",
+            "error": None,
+            "available": True,
+        }
+        with mock.patch.object(
+                battery, "proc_name", return_value="worker"), \
+                mock.patch.object(cli, "is_root", return_value=True):
+            actual, exit_code = battery.top_result(
+                previous, current, 1.0, 20, model=model)
+            rows, totals = battery.rank_top(
+                previous, current, 1.0, _COEFFS)
+            expected = battery._top_document(
+                rows, totals, 20, "test-model", ())
+        self.assertEqual(actual, expected)
+        self.assertEqual(exit_code, cli.EXIT_OK)
+
     def test_no_pmenergy_marks_partial(self):
         rows, sys_totals = [], battery.BatterySysTotals(0, None, None, 0, 0)
         with mock.patch.object(cli, "is_root", return_value=True):

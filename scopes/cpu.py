@@ -239,6 +239,18 @@ def _document(command, rows, sys_totals, ncpu, limit, now_ticks):
         processes=[_process_entry(row, now_ticks) for row in rows[:limit]])
 
 
+def result(command, prev, cur, dt, limit, ncpu=None, now_ticks=None,
+           ranked=None):
+    """Return one structured CPU or wakeup interval and its exit code."""
+    rank_fn = rank_cpu if command == "top" else rank_wakeups
+    rows, sys_totals = ranked or rank_fn(prev, cur, dt)
+    ncpu = ncpu if ncpu is not None else (os.cpu_count() or 1)
+    now_ticks = (now_ticks if now_ticks is not None
+                 else rusage.mach_absolute_time())
+    return (_document(command, rows, sys_totals, ncpu, limit, now_ticks),
+            cli.EXIT_OK)
+
+
 def _frame(command, rows, sys_totals, ncpu, interval, limit, now_ticks, styled=True):
     clear = CLEAR if styled else ""
     bold = BOLD if styled else ""
@@ -296,9 +308,11 @@ def _run(command, rank_fn, options):
         now = time.monotonic()
         rows, sys_totals = rank_fn(prev, cur, now - prev_t)
         now_ticks = rusage.mach_absolute_time()
+        document, exit_code = result(
+            command, prev, cur, now - prev_t, options.limit,
+            ncpu=ncpu, now_ticks=now_ticks, ranked=(rows, sys_totals))
         if options.json:
-            cli.emit_json(
-                _document(command, rows, sys_totals, ncpu, options.limit, now_ticks))
+            cli.emit_json(document)
         else:
             sys.stdout.write(_frame(
                 command, rows, sys_totals, ncpu, options.interval, options.limit,
@@ -306,7 +320,7 @@ def _run(command, rank_fn, options):
             sys.stdout.flush()
         if options.once or (
                 options.duration is not None and now - started >= options.duration):
-            return cli.EXIT_OK
+            return exit_code
         prev, prev_t = cur, now
 
 

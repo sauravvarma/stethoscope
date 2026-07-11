@@ -455,40 +455,40 @@ def cmd_status(options):
     """SMART health for each physical drive, or just the one named."""
     only = options.rest[0] if options.rest else None
     collection = collect_health(only)
+    document, exit_code = status_result(only, collection=collection)
+    if options.json:
+        cli.emit_json(document)
+    elif document["error"]:
+        sys.stderr.write(document["error"] + "\n")
+    else:
+        sys.stdout.write(_render(
+            document["drives"], collection["smartctl_path"]))
+    return exit_code
+
+
+def status_result(only=None, collection=None):
+    """Return the stable SMART status document and command exit code."""
+    collection = collection or collect_health(only)
     message = collection["enumeration_error"]
     if message:
-        if options.json:
-            cli.emit_json(schema.document(
-                "smart", "status", partial=True,
-                partial_reasons=["diskutil_unavailable"], drives=[],
-                error=message))
-        else:
-            sys.stderr.write(message + "\n")
-        return cli.EXIT_ERROR
+        return schema.document(
+            "smart", "status", partial=True,
+            partial_reasons=["diskutil_unavailable"], drives=[],
+            error=message), cli.EXIT_ERROR
 
     message = collection["selection_error"]
     if message:
-        if options.json:
-            cli.emit_json(schema.document(
-                "smart", "status", drives=[], error=message))
-        else:
-            sys.stderr.write(message + "\n")
-        return cli.EXIT_USAGE
+        return schema.document(
+            "smart", "status", drives=[], error=message), cli.EXIT_USAGE
 
     results = collection["drives"]
-    reasons = collection["partial_reasons"]
-    partial = collection["partial"]
-
-    if options.json:
-        cli.emit_json(schema.document(
-            "smart", "status", partial=partial, partial_reasons=reasons,
-            drives=results, error=None))
-    else:
-        sys.stdout.write(_render(results, collection["smartctl_path"]))
-
-    if any(h["worst_severity"] != "ok" for h in results):
-        return cli.EXIT_FINDINGS
-    return cli.EXIT_OK
+    document = schema.document(
+        "smart", "status", partial=collection["partial"],
+        partial_reasons=collection["partial_reasons"],
+        drives=results, error=None)
+    if any(health["worst_severity"] != "ok" for health in results):
+        return document, cli.EXIT_FINDINGS
+    return document, cli.EXIT_OK
 
 
 USAGE = """stethoscope smart — drive health, wear, and pre-failure warnings

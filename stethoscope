@@ -14,6 +14,7 @@ reusable data layer in scopes/<name>.py.
   stethoscope battery <cmd>   health, energy attribution, unplug drainers
   stethoscope smart [disk]    drive health, wear, pre-failure warnings
   stethoscope checkup         one-shot full-body examination
+  stethoscope mcp             expose read-only scopes as MCP tools over stdio
   stethoscope triage          ranked anomaly diagnosis
   stethoscope anomaly <cmd>   deviation, leaks, runaway, or triage
   stethoscope record          append live vitals to a local JSONL corpus
@@ -58,6 +59,7 @@ scopes:
   smart   physical-drive health and endurance
             status [disk]   SMART verdict, wear, life, and warnings
   checkup one-shot full-body exam and canonical diagnosis
+  mcp     read-only Model Context Protocol server (stdio)
   triage  one-shot baseline deviation, leaks, runaways, and point health
   anomaly one-shot detector: deviation, leaks, runaway, or triage
   record  foreground sampler (launchd-friendly; default interval 60s)
@@ -83,6 +85,7 @@ SCOPES = {
     "battery": {"module": "scopes.battery"},
     "smart": {"module": "scopes.smart"},
     "checkup": {"module": "scopes.checkup"},
+    "mcp": {"module": "scopes.mcp_server"},
     "triage": {"module": "scopes.anomaly"},
     "anomaly": {"module": "scopes.anomaly"},
     "record": {"module": "scopes.record"},

@@ -252,6 +252,12 @@ def _top_document(rows, sysmem, limit):
         ])
 
 
+def top_result(limit):
+    """Collect one memory snapshot and return its document and exit code."""
+    rows = rank_footprint(snapshot_footprint())
+    return _top_document(rows, system_memory(), limit), cli.EXIT_OK
+
+
 def _top_frame(rows, sysmem, interval, limit, styled=True):
     clear = CLEAR if styled else ""
     bold = BOLD if styled else ""
@@ -282,19 +288,23 @@ def cmd_top(options):
     started = time.monotonic()
 
     while True:
-        rows = rank_footprint(snapshot_footprint())
-        sysmem = system_memory()
+        document, exit_code = top_result(options.limit)
         if options.json:
-            cli.emit_json(_top_document(rows, sysmem, options.limit))
+            cli.emit_json(document)
         else:
+            rows = [
+                (item["footprint_bytes"], item["resident_size_bytes"],
+                 item["pid"], item["name"])
+                for item in document["processes"]
+            ]
             sys.stdout.write(_top_frame(
-                rows, sysmem, options.interval, options.limit,
+                rows, document["system"], options.interval, options.limit,
                 styled=sys.stdout.isatty()))
             sys.stdout.flush()
         now = time.monotonic()
         if options.once or (
                 options.duration is not None and now - started >= options.duration):
-            return cli.EXIT_OK
+            return exit_code
         time.sleep(options.interval)
 
 

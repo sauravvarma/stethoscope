@@ -779,6 +779,28 @@ class TestRenderHumanMissingFields(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestStatusJsonShape(unittest.TestCase):
+    def test_public_status_result_matches_cli_document_and_exit(self):
+        health = {
+            "device": "disk0", "internal": True,
+            "smartctl_available": True, "warnings": [],
+            "worst_severity": "ok",
+        }
+        collection = {
+            "drives": [health],
+            "smartctl_path": "/usr/local/bin/smartctl",
+            "smartctl_available": True,
+            "partial": False,
+            "partial_reasons": [],
+            "enumeration_error": None,
+            "selection_error": None,
+        }
+        actual, exit_code = smart.status_result(
+            collection=collection)
+        expected = schema.document(
+            "smart", "status", drives=[health], error=None)
+        self.assertEqual(actual, expected)
+        self.assertEqual(exit_code, cli.EXIT_OK)
+
     def test_document_has_stable_envelope_and_drive_fields(self):
         options = cli.parse_options(["--json"])
         drives = [("disk0", True)]

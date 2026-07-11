@@ -31,6 +31,7 @@ No third-party dependencies — system Python 3 + ctypes only.
 
 import os
 import re
+import selectors
 import sys
 import time
 import signal
@@ -50,6 +51,65 @@ from core import cli, rusage, schema
 list_pids = rusage.list_pids
 proc_diskio = rusage.proc_diskio
 proc_name = rusage.proc_name
+
+PROBE_TIMEOUT = 15
+MAX_PROBE_OUTPUT_BYTES = 4 * 1024 * 1024
+_READ_CHUNK_BYTES = 64 * 1024
+
+
+class ProbeOutputError(subprocess.SubprocessError):
+    """A native probe exceeded its bounded captured-output contract."""
+
+
+def _run_bounded(argv, timeout=PROBE_TIMEOUT,
+                 max_output=MAX_PROBE_OUTPUT_BYTES):
+    """Run a fixed argv with deadline and bounded combined captured output."""
+    process = subprocess.Popen(
+        argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    selector = selectors.DefaultSelector()
+    stdout_chunks = []
+    stderr_chunks = []
+    total = 0
+    completed = False
+    try:
+        selector.register(process.stdout, selectors.EVENT_READ, stdout_chunks)
+        selector.register(process.stderr, selectors.EVENT_READ, stderr_chunks)
+        deadline = time.monotonic() + timeout
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            events = selector.select(remaining)
+            if not events:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            for key, _mask in events:
+                try:
+                    chunk = os.read(key.fd, _READ_CHUNK_BYTES)
+                except InterruptedError:
+                    continue
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                total += len(chunk)
+                if total > max_output:
+                    raise ProbeOutputError(
+                        "probe output exceeds %d bytes" % max_output)
+                key.data.append(chunk)
+        remaining = max(0.0, deadline - time.monotonic())
+        return_code = process.wait(timeout=remaining)
+        completed = True
+        return subprocess.CompletedProcess(
+            argv, return_code,
+            stdout=b"".join(stdout_chunks).decode("utf-8", "replace"),
+            stderr=b"".join(stderr_chunks).decode("utf-8", "replace"))
+    finally:
+        selector.close()
+        if not completed and process.poll() is None:
+            process.kill()
+        if not completed:
+            process.wait()
+        process.stdout.close()
+        process.stderr.close()
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +216,12 @@ def _top_document(rows, sys_dr, sys_dw, limit):
         ])
 
 
+def top_result(prev, cur, dt, limit, ranked=None):
+    """Return the structured disk-top result for one completed interval."""
+    rows, sys_dr, sys_dw = ranked or rank_io(prev, cur, dt)
+    return _top_document(rows, sys_dr, sys_dw, limit), cli.EXIT_OK
+
+
 def _top_frame(rows, sys_dr, sys_dw, interval, limit, styled=True):
     clear = CLEAR if styled else ""
     bold = BOLD if styled else ""
@@ -192,9 +258,12 @@ def cmd_top(options):
         time.sleep(options.interval)
         cur = snapshot_diskio()
         now = time.monotonic()
-        rows, sys_dr, sys_dw = rank_io(prev, cur, now - prev_t)
+        ranked = rank_io(prev, cur, now - prev_t)
+        rows, sys_dr, sys_dw = ranked
+        document, exit_code = top_result(
+            prev, cur, now - prev_t, options.limit, ranked=ranked)
         if options.json:
-            cli.emit_json(_top_document(rows, sys_dr, sys_dw, options.limit))
+            cli.emit_json(document)
         else:
             sys.stdout.write(_top_frame(
                 rows, sys_dr, sys_dw, options.interval, options.limit,
@@ -202,7 +271,7 @@ def cmd_top(options):
             sys.stdout.flush()
         if options.once or (
                 options.duration is not None and now - started >= options.duration):
-            return cli.EXIT_OK
+            return exit_code
         prev, prev_t = cur, now
 
 
@@ -253,7 +322,7 @@ def open_files(pid, disk_only=True):
     Shared by cmd_holds and the TUI's holds popup.
     """
     cmd = ["/usr/sbin/lsof", "-nP", "-p", str(pid)]
-    out = subprocess.run(cmd, capture_output=True, text=True, timeout=15).stdout
+    out = _run_bounded(cmd).stdout
     items = []
     for ln in out.splitlines()[1:]:   # skip header
         parts = ln.split(None, 8)
@@ -268,45 +337,54 @@ def open_files(pid, disk_only=True):
 
 def cmd_holds(pid, options):
     """Show open file descriptors (files/dirs the process is holding)."""
+    document, exit_code = holds_result(pid)
+    if options.json:
+        cli.emit_json(document)
+        return exit_code
+    if document["error"]:
+        sys.stderr.write("%s\n" % document["error"])
+        return exit_code
+
+    name = document["name"]
+    io = document["cumulative"]
+    items = [(item["reason"], item["type"], item["path"])
+             for item in document["holds"]]
+    print(BOLD + "stethoscope disk holds · pid %d (%s)" % (pid, name) + RESET)
+    if io:
+        print(DIM + "cumulative disk I/O: read %s / written %s"
+              % (human(io["read"]), human(io["write"])) + RESET)
+    print()
+    if not items:
+        print(DIM + "(no on-disk files held, or permission denied — try sudo)" + RESET)
+        return exit_code
+    print(BOLD + "%-18s %-5s %s" % ("HOLD", "TYPE", "PATH") + RESET)
+    for reason, kind, path in items:
+        print("%-18s %-5s %s" % (reason, kind, path))
+    return exit_code
+
+
+def holds_result(pid):
+    """Return the stable disk-holds document and command exit code."""
     name = proc_name(pid)
     io = proc_diskio(pid)
     try:
         items = open_files(pid)
     except (OSError, subprocess.SubprocessError) as exc:
-        if options.json:
-            partial, reasons = _visibility()
-            cli.emit_json(schema.document(
-                "disk", "holds", partial=partial, partial_reasons=reasons,
-                pid=pid, name=name, cumulative=None, holds=[],
-                error="lsof failed: %s" % exc))
-        else:
-            sys.stderr.write("lsof failed: %s\n" % exc)
-        return cli.EXIT_ERROR
-
-    if options.json:
         partial, reasons = _visibility()
-        cli.emit_json(schema.document(
+        return schema.document(
             "disk", "holds", partial=partial, partial_reasons=reasons,
-            pid=pid,
-            name=name,
-            cumulative={"read": io[0], "write": io[1]} if io else None,
-            holds=[{"reason": reason, "type": kind, "path": path}
-                   for reason, kind, path in items],
-            error=None))
-        return cli.EXIT_OK
+            pid=pid, name=name, cumulative=None, holds=[],
+            error="lsof failed: %s" % exc), cli.EXIT_ERROR
 
-    print(BOLD + "stethoscope disk holds · pid %d (%s)" % (pid, name) + RESET)
-    if io:
-        print(DIM + "cumulative disk I/O: read %s / written %s"
-              % (human(io[0]), human(io[1])) + RESET)
-    print()
-    if not items:
-        print(DIM + "(no on-disk files held, or permission denied — try sudo)" + RESET)
-        return cli.EXIT_OK
-    print(BOLD + "%-18s %-5s %s" % ("HOLD", "TYPE", "PATH") + RESET)
-    for reason, kind, path in items:
-        print("%-18s %-5s %s" % (reason, kind, path))
-    return cli.EXIT_OK
+    partial, reasons = _visibility()
+    return schema.document(
+        "disk", "holds", partial=partial, partial_reasons=reasons,
+        pid=pid,
+        name=name,
+        cumulative={"read": io[0], "write": io[1]} if io else None,
+        holds=[{"reason": reason, "type": kind, "path": path}
+               for reason, kind, path in items],
+        error=None), cli.EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +393,7 @@ def cmd_holds(pid, options):
 
 def _mount_table():
     """Parse `mount` into a list of (device, mountpoint)."""
-    out = subprocess.run(["/sbin/mount"], capture_output=True, text=True).stdout
+    out = _run_bounded(["/sbin/mount"]).stdout
     pairs = []
     for ln in out.splitlines():
         # form: "/dev/disk6s2 on /Volumes/X9 Pro (exfat, ...)"
@@ -382,8 +460,7 @@ def collect_holders(targets):
     procs = {}
     for dev, mp in targets:
         # Passing the mount point makes lsof list every open file on that filesystem.
-        res = subprocess.run(["/usr/sbin/lsof", "-nP", mp],
-                             capture_output=True, text=True)
+        res = _run_bounded(["/usr/sbin/lsof", "-nP", mp])
         for ln in res.stdout.splitlines()[1:]:   # skip header
             parts = ln.split(None, 8)
             if len(parts) < 9:
@@ -415,66 +492,53 @@ def _busy_holder(pid, process):
 
 def cmd_busy(arg, options):
     """Reverse lookup: which processes hold files open on a volume/disk."""
-    targets = resolve_volume(arg)
-    if not targets:
-        if options.json:
-            partial, reasons = _visibility()
-            cli.emit_json(schema.document(
-                "disk", "busy", partial=partial, partial_reasons=reasons,
-                target=arg, targets=[], holders=[],
-                error="no mounted volume/device matches %r" % arg))
-        else:
+    document, exit_code = busy_result(arg)
+    if options.json:
+        cli.emit_json(document)
+        return exit_code
+    if document["error"]:
+        if exit_code == cli.EXIT_USAGE:
+            try:
+                mounted = ", ".join(sorted(
+                    mp for _, mp in _mount_table()
+                    if mp.startswith("/Volumes/")))
+            except (OSError, subprocess.SubprocessError):
+                mounted = "(mount probe unavailable)"
             sys.stderr.write("no mounted volume/device matches %r.\n"
-                             "mounted volumes: %s\n"
-                             % (arg, ", ".join(sorted(
-                                 mp for _, mp in _mount_table()
-                                 if mp.startswith("/Volumes/")))))
-        return cli.EXIT_USAGE
+                             "mounted volumes: %s\n" % (arg, mounted))
+        else:
+            sys.stderr.write("%s\n" % document["error"])
+        return exit_code
 
-    if not options.json and not cli.is_root():
+    if not cli.is_root():
         sys.stderr.write(DIM + "note: not root — holders owned by other users / system "
                          "daemons (mds, fseventsd) are hidden. Re-run with sudo for the "
                          "full picture.\n" + RESET)
 
-    procs = collect_holders(targets)
-    if options.json:
-        partial, reasons = _visibility()
-        cli.emit_json(schema.document(
-            "disk", "busy", partial=partial, partial_reasons=reasons,
-            target=arg,
-            targets=[{"device": device, "mount": mount}
-                     for device, mount in targets],
-            holders=[
-                _busy_holder(pid, procs[pid])
-                for pid in sorted(
-                    procs, key=lambda value: -len(procs[value]["holds"]))
-            ],
-            error=None))
-        return cli.EXIT_FINDINGS if procs else cli.EXIT_OK
-
+    targets = [(item["device"], item["mount"]) for item in document["targets"]]
+    holders = document["holders"]
     label = ", ".join("%s (%s)" % (mp, dev) for dev, mp in targets)
     print(BOLD + "stethoscope disk busy · %s" % label + RESET)
 
-    if not procs:
+    if not holders:
         print(DIM + "  no processes are holding this volume — it should eject cleanly."
               + RESET)
-        return cli.EXIT_OK
+        return exit_code
 
-    print(DIM + "%d process(es) holding it open:\n" % len(procs) + RESET)
-    for pid in sorted(procs, key=lambda p: -len(procs[p]["holds"])):
-        p = procs[pid]
-        reasons = {}
-        for reason, _ in p["holds"]:
-            reasons[reason] = reasons.get(reason, 0) + 1
+    print(DIM + "%d process(es) holding it open:\n" % len(holders) + RESET)
+    for holder in holders:
+        pid = holder["pid"]
+        reasons = holder["reasons"]
         reason_str = ", ".join("%s×%d" % (r, c) if c > 1 else r
                                for r, c in sorted(reasons.items(), key=lambda x: -x[1]))
-        io = proc_diskio(pid)
-        io_str = ("  ·  live I/O: read %s / written %s" % (human(io[0]), human(io[1]))) if io else ""
-        print(BOLD + "  pid %-6d %-20s" % (pid, p["name"]) + RESET
-              + DIM + " user=%s%s" % (p["user"], io_str) + RESET)
+        io = holder["io"]
+        io_str = ("  ·  live I/O: read %s / written %s" %
+                  (human(io["read"]), human(io["write"]))) if io else ""
+        print(BOLD + "  pid %-6d %-20s" % (pid, holder["name"]) + RESET
+              + DIM + " user=%s%s" % (holder["user"], io_str) + RESET)
         print("    holding: %s" % reason_str)
         # show up to 3 example paths (skip bare mount-point/dir noise)
-        examples = [n for _, n in p["holds"]][:3]
+        examples = holder["paths"][:3]
         for ex in examples:
             print(DIM + "      %s" % ex + RESET)
         print()
@@ -485,7 +549,48 @@ def cmd_busy(arg, options):
     print(DIM + "to force-eject: diskutil unmount force '%s'   (or 'diskutil unmountDisk %s')"
           % (targets[0][1], whole_disk) + RESET)
     print(DIM + "to release a holder, quit its app or:  kill <pid>" + RESET)
-    return cli.EXIT_FINDINGS
+    return exit_code
+
+
+def busy_result(arg):
+    """Return the stable disk-busy document and command exit code."""
+    partial, reasons = _visibility()
+    try:
+        targets = resolve_volume(arg)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return schema.document(
+            "disk", "busy", partial=True,
+            partial_reasons=reasons + ["mount_probe_failed"],
+            target=arg, targets=[], holders=[],
+            error="mount probe failed: %s" % exc), cli.EXIT_ERROR
+    if not targets:
+        return schema.document(
+            "disk", "busy", partial=partial, partial_reasons=reasons,
+            target=arg, targets=[], holders=[],
+            error="no mounted volume/device matches %r" % arg), cli.EXIT_USAGE
+
+    try:
+        procs = collect_holders(targets)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return schema.document(
+            "disk", "busy", partial=True,
+            partial_reasons=reasons + ["lsof_probe_failed"],
+            target=arg,
+            targets=[{"device": device, "mount": mount}
+                     for device, mount in targets],
+            holders=[], error="lsof failed: %s" % exc), cli.EXIT_ERROR
+    document = schema.document(
+        "disk", "busy", partial=partial, partial_reasons=reasons,
+        target=arg,
+        targets=[{"device": device, "mount": mount}
+                 for device, mount in targets],
+        holders=[
+            _busy_holder(pid, procs[pid])
+            for pid in sorted(
+                procs, key=lambda value: -len(procs[value]["holds"]))
+        ],
+        error=None)
+    return document, cli.EXIT_FINDINGS if procs else cli.EXIT_OK
 
 
 # ---------------------------------------------------------------------------

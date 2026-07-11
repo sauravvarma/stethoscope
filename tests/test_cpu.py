@@ -151,6 +151,20 @@ class TestDocument(unittest.TestCase):
                                      ncpu=1, limit=2, now_ticks=1)
         self.assertEqual(len(document["processes"]), 2)
 
+    def test_public_result_matches_ranked_document(self):
+        previous = {(7, 70): (0, 0, None, 0, 0)}
+        current = {(7, 70): (100_000_000, 0, None, 2, 3)}
+        with mock.patch.object(cpu, "proc_name", return_value="worker"), \
+                mock.patch.object(cli, "is_root", return_value=True):
+            actual, exit_code = cpu.result(
+                "top", previous, current, 1.0, 20,
+                ncpu=4, now_ticks=1_000_000)
+            rows, totals = cpu.rank_cpu(previous, current, 1.0)
+            expected = cpu._document(
+                "top", rows, totals, 4, 20, 1_000_000)
+        self.assertEqual(actual, expected)
+        self.assertEqual(exit_code, cli.EXIT_OK)
+
 
 class TestFrame(unittest.TestCase):
     def test_wake_column_uses_total_not_idle_only(self):

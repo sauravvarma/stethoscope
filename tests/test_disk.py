@@ -12,7 +12,11 @@ duplicates those; this file covers the pure data/parse layer instead —
 formatting, lsof/mount text parsing, and volume-argument resolution.
 """
 
+import subprocess
+import sys
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from unittest import mock
 
 from core import rusage
@@ -69,7 +73,8 @@ class TestMountTable(unittest.TestCase):
     )
 
     def test_parses_device_and_mountpoint_preserving_spaces(self):
-        with mock.patch.object(disk.subprocess, "run", return_value=_fake_run(self.SAMPLE)):
+        with mock.patch.object(
+                disk, "_run_bounded", return_value=_fake_run(self.SAMPLE)):
             table = disk._mount_table()
         self.assertIn(("/dev/disk3s1s1", "/"), table)
         self.assertIn(("devfs", "/dev"), table)
@@ -141,11 +146,28 @@ class TestOpenFiles(unittest.TestCase):
     )
 
     def test_disk_only_keeps_regular_files_and_dirs(self):
-        with mock.patch.object(disk.subprocess, "run", return_value=_fake_run(self.LSOF)):
+        with mock.patch.object(
+                disk, "_run_bounded", return_value=_fake_run(self.LSOF)):
             items = disk.open_files(1000)
         self.assertEqual([t for _, t, _ in items], ["DIR", "REG", "REG"])
         self.assertEqual([r for r, _, _ in items],
                          ["working dir (cwd)", "executable/text", "open (read)"])
+
+
+class TestStructuredResults(unittest.TestCase):
+    def test_top_result_matches_rank_and_document_contract(self):
+        previous = {(7, 70): (100, 200)}
+        current = {(7, 70): (300, 250)}
+        with mock.patch.object(disk.cli, "is_root", return_value=True), \
+                mock.patch.object(disk, "proc_name", return_value="writer"):
+            result, exit_code = disk.top_result(
+                previous, current, 1.0, limit=20)
+            rows, read_rate, write_rate = disk.rank_io(
+                previous, current, 1.0)
+            expected = disk._top_document(
+                rows, read_rate, write_rate, limit=20)
+        self.assertEqual(result, expected)
+        self.assertEqual(exit_code, disk.cli.EXIT_OK)
 
 
 class TestCollectHolders(unittest.TestCase):
@@ -157,13 +179,73 @@ class TestCollectHolders(unittest.TestCase):
     )
 
     def test_groups_holds_by_pid(self):
-        with mock.patch.object(disk.subprocess, "run", return_value=_fake_run(self.LSOF)):
+        with mock.patch.object(
+                disk, "_run_bounded", return_value=_fake_run(self.LSOF)):
             procs = disk.collect_holders([("/dev/disk6s2", "/Volumes/X9 Pro")])
         self.assertEqual(set(procs), {1263, 2000})
         self.assertEqual(procs[1263]["name"], "mds")
         self.assertEqual(procs[1263]["user"], "root")
         self.assertEqual(len(procs[1263]["holds"]), 2)
         self.assertEqual(procs[2000]["holds"][0][0], "executable/text")
+
+
+class TestBoundedNativeProbes(unittest.TestCase):
+    def test_bounded_runner_captures_small_output(self):
+        result = disk._run_bounded(
+            [sys.executable, "-c", "print('ok')"],
+            timeout=1, max_output=100)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "ok\n")
+
+    def test_bounded_runner_rejects_excess_output_and_timeout(self):
+        with self.assertRaises(disk.ProbeOutputError):
+            disk._run_bounded(
+                [sys.executable, "-c", "print('x' * 200)"],
+                timeout=1, max_output=100)
+        with self.assertRaises(subprocess.TimeoutExpired):
+            disk._run_bounded(
+                [sys.executable, "-c", "import time; time.sleep(1)"],
+                timeout=0.01, max_output=100)
+
+    def test_busy_result_maps_probe_limits_to_structured_runtime_error(self):
+        with mock.patch.object(
+                disk, "resolve_volume",
+                side_effect=subprocess.TimeoutExpired(["mount"], 1)), \
+                mock.patch.object(disk.cli, "is_root", return_value=True):
+            document, exit_code = disk.busy_result("disk1")
+        self.assertEqual(exit_code, disk.cli.EXIT_ERROR)
+        self.assertTrue(document["partial"])
+        self.assertIn("mount_probe_failed", document["partial_reasons"])
+        self.assertEqual(document["targets"], [])
+
+    def test_holds_result_maps_output_limit_to_structured_runtime_error(self):
+        with mock.patch.object(
+                disk, "_run_bounded",
+                side_effect=disk.ProbeOutputError("too large")), \
+                mock.patch.object(disk, "proc_name", return_value="proc"), \
+                mock.patch.object(disk, "proc_diskio", return_value=None), \
+                mock.patch.object(disk.cli, "is_root", return_value=True):
+            document, exit_code = disk.holds_result(42)
+        self.assertEqual(exit_code, disk.cli.EXIT_ERROR)
+        self.assertEqual(document["holds"], [])
+        self.assertIn("too large", document["error"])
+
+    def test_busy_runtime_error_does_not_probe_mounts_again(self):
+        document = {
+            "error": "lsof failed: timed out",
+            "targets": [], "holders": [],
+        }
+        errors = StringIO()
+        with mock.patch.object(
+                disk, "busy_result",
+                return_value=(document, disk.cli.EXIT_ERROR)), \
+                mock.patch.object(disk, "_mount_table") as mounts, \
+                redirect_stderr(errors):
+            exit_code = disk.cmd_busy(
+                "disk1", disk.cli.parse_options([]))
+        self.assertEqual(exit_code, disk.cli.EXIT_ERROR)
+        mounts.assert_not_called()
+        self.assertIn("lsof failed", errors.getvalue())
 
 
 class TestProcNameCache(unittest.TestCase):

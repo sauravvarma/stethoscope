@@ -367,6 +367,24 @@ class TestTopContract(unittest.TestCase):
         document = memory._top_document(rows, sysmem, 2)
         self.assertEqual(len(document["processes"]), 2)
 
+    def test_public_top_result_matches_cli_document(self):
+        snapshot = {(7, 70): (5 * MB, 6 * MB)}
+        sysmem = {"available": True, "errors": [], "total": 10 * MB,
+                  "used": 5 * MB, "free": 5 * MB, "active": 0,
+                  "inactive": 0, "wired": 0, "compressed": 0,
+                  "pressure": "normal"}
+        with mock.patch.object(
+                memory, "snapshot_footprint", return_value=snapshot), \
+                mock.patch.object(memory, "proc_name", return_value="worker"), \
+                mock.patch.object(
+                    memory, "system_memory", return_value=sysmem), \
+                mock.patch.object(cli, "is_root", return_value=True):
+            actual, exit_code = memory.top_result(20)
+            expected = memory._top_document(
+                memory.rank_footprint(snapshot), sysmem, 20)
+        self.assertEqual(actual, expected)
+        self.assertEqual(exit_code, cli.EXIT_OK)
+
     def test_once_emits_exactly_one_document(self):
         options = cli.parse_options(["--json", "--once"])
         with mock.patch.object(memory, "snapshot_footprint", return_value={}), \

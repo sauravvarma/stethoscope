@@ -53,6 +53,50 @@ reject `--json` rather than returning non-JSON output.
 Hardware absence or an optional external tool being unavailable is represented
 in data when it is a supported state; it is not automatically a probe failure.
 
+## MCP transport
+
+`stethoscope mcp` exposes ten read-only tools over UTF-8 newline-delimited
+JSON-RPC 2.0 on stdio using MCP protocol `2025-11-25`. Standard output contains
+protocol messages only; diagnostics use standard error. A client must send a
+valid `initialize` request first, then `notifications/initialized`, before
+`ping`, `tools/list`, or `tools/call`. Valid notifications never receive a
+response. The server advertises `{"tools":{"listChanged":false}}` and reads its
+`serverInfo.version` from `VERSION`.
+
+Each successful `tools/call` result has one compact, strict JSON text content
+item and an identical `structuredContent` document. Exit codes `0` and `1`
+produce `isError: false`; `2`, `3`, and `4` produce `isError: true`. Non-finite
+or non-serializable values are rejected, never coerced. JSON-RPC errors are:
+parse `-32700`, invalid request/lifecycle `-32600`, unknown method `-32601`,
+invalid parameters or unknown tool `-32602`, and internal protocol/tool failure
+`-32603`.
+
+Input lines, output documents, repeated calls, strings, sampling intervals
+(`0 < interval <= 60`), and limits (`1..256`) are bounded. Booleans are not
+accepted as numbers or integers, and tool argument objects reject unknown
+properties. Request IDs may be integers or strings; null, booleans, fractional
+numbers, and reuse within a session are invalid. Request parameter objects may
+carry the MCP-standard `_meta` object. Invalid notifications remain silent.
+
+The concrete transport ceilings are 1 MiB per input line, 4 MiB per structured
+tool document, 256 tool calls, and 4096 unique request IDs per server process;
+string IDs are at most 256 UTF-8 bytes. The disk mount/lsof probes used by
+`disk_busy` have a 15-second deadline and a 4 MiB combined output ceiling.
+Exceeding a native-probe bound remains a structured exit-4 tool result rather
+than terminating the MCP session.
+
+Integer request IDs are restricted to signed 64-bit values, and incoming JSON
+numeric tokens are rejected before conversion when their textual form exceeds
+64 characters. Both `disk_holds` and `disk_busy` use the bounded native-probe
+runner.
+
+The tools are `disk_top`, `disk_holds`, `disk_busy`, `cpu_top`, `cpu_wakeups`,
+`memory_top`, `battery_health`, `battery_top`, `smart_status`, and `checkup`.
+Their `structuredContent` is the corresponding document described below;
+`checkup` is returned directly rather than wrapped. Recording/history stores,
+battery drainers, kill/eject actions, and root-heavy inspect commands are
+deliberately not exposed.
+
 ## `disk top`
 
 ```json

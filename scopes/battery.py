@@ -272,19 +272,26 @@ def _render_health_human(h):
 
 
 def cmd_health(options):
-    h = battery_health()
-    reasons = ["pmset_unavailable"] if h.get("pmset_error") else []
+    document, exit_code = health_result()
     if options.json:
-        cli.emit_json(schema.document(
-            "battery", "health", partial=bool(reasons),
-            partial_reasons=reasons, **h))
+        cli.emit_json(document)
     else:
-        _render_health_human(h)
-    if h["probe_error"]:
-        return cli.EXIT_ERROR
-    if h["condition"] == "Service Recommended":
-        return cli.EXIT_FINDINGS
-    return cli.EXIT_OK
+        _render_health_human(document)
+    return exit_code
+
+
+def health_result():
+    """Return the stable battery-health document and command exit code."""
+    health = battery_health()
+    reasons = ["pmset_unavailable"] if health.get("pmset_error") else []
+    document = schema.document(
+        "battery", "health", partial=bool(reasons),
+        partial_reasons=reasons, **health)
+    if health["probe_error"]:
+        return document, cli.EXIT_ERROR
+    if health["condition"] == "Service Recommended":
+        return document, cli.EXIT_FINDINGS
+    return document, cli.EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +523,17 @@ def _top_document(rows, sys_totals, limit, pmenergy_source, extra_reasons):
         processes=[_top_entry(row) for row in rows[:limit]])
 
 
+def top_result(prev, cur, dt, limit, model=None, ranked=None):
+    """Return one structured battery-top interval and its exit code."""
+    model = model or power_model()
+    coefficients = model["coefficients"]
+    reasons = (() if coefficients is not None
+               else ("no_pmenergy_coefficients",))
+    rows, sys_totals = ranked or rank_top(prev, cur, dt, coefficients)
+    return (_top_document(
+        rows, sys_totals, limit, model["source"], reasons), cli.EXIT_OK)
+
+
 def _top_frame(rows, sys_totals, interval, limit, styled=True):
     clear = CLEAR if styled else ""
     bold = BOLD if styled else ""
@@ -551,8 +569,6 @@ def cmd_top(options):
         warn_if_not_root()
     model = power_model()
     coeffs = model["coefficients"]
-    coeffs_path = model["source"]
-    extra_reasons = () if coeffs is not None else ("no_pmenergy_coefficients",)
 
     prev = snapshot_power()
     prev_t = time.monotonic()
@@ -562,9 +578,11 @@ def cmd_top(options):
         cur = snapshot_power()
         now = time.monotonic()
         rows, sys_totals = rank_top(prev, cur, now - prev_t, coeffs)
+        document, exit_code = top_result(
+            prev, cur, now - prev_t, options.limit, model=model,
+            ranked=(rows, sys_totals))
         if options.json:
-            cli.emit_json(_top_document(
-                rows, sys_totals, options.limit, coeffs_path, extra_reasons))
+            cli.emit_json(document)
         else:
             sys.stdout.write(_top_frame(
                 rows, sys_totals, options.interval, options.limit,
@@ -572,7 +590,7 @@ def cmd_top(options):
             sys.stdout.flush()
         if options.once or (
                 options.duration is not None and now - started >= options.duration):
-            return cli.EXIT_OK
+            return exit_code
         prev, prev_t = cur, now
 
 
