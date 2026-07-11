@@ -32,11 +32,11 @@ import sys
 import time
 import signal
 
-try:
-    from core import rusage                # via the stethoscope dispatcher
-except ImportError:                        # run directly: ./scopes/cpu.py
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from core import rusage
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from core import rusage
 
 list_pids = rusage.list_pids
 proc_name = rusage.proc_name

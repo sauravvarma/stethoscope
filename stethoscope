@@ -15,10 +15,13 @@ reusable data layer in scopes/<name>.py.
 No third-party dependencies — system Python 3 only.
 """
 
+import importlib
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+
+from core import cli
 
 USAGE = """stethoscope — vital signs for your Mac
 
@@ -45,28 +48,31 @@ examples:
 """
 
 
+SCOPES = {
+    "disk": {"module": "scopes.disk", "tui": "scopes.disk_tui"},
+    "cpu": {"module": "scopes.cpu"},
+}
+
+
+def _load(module_name):
+    return importlib.import_module(module_name)
+
+
 def main(argv):
     args = argv[1:]
     if not args or args[0] in ("-h", "--help", "help"):
         print(USAGE)
-        return 0
+        return cli.EXIT_OK
 
     scope = args.pop(0)
-
-    if scope == "disk":
-        if args and args[0] == "tui":
-            from scopes import disk_tui
-            return disk_tui.main()
-        from scopes import disk
-        # disk.main expects [prog, mode, ...]; rebrand prog for its messages
-        return disk.main(["stethoscope disk"] + args)
-
-    if scope == "cpu":
-        from scopes import cpu
-        return cpu.main(["stethoscope cpu"] + args)
+    spec = SCOPES.get(scope)
+    if spec is not None:
+        if args and args[0] == "tui" and spec.get("tui"):
+            return _load(spec["tui"]).main()
+        return _load(spec["module"]).main(["stethoscope %s" % scope] + args)
 
     sys.stderr.write("unknown scope: %s\n\n%s" % (scope, USAGE))
-    return 2
+    return cli.EXIT_USAGE
 
 
 if __name__ == "__main__":
