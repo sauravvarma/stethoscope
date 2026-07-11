@@ -218,26 +218,32 @@ def _empty_history(path, since):
     }
 
 
-def _collect_points():
+def _collect_points(observations=None):
     reasons = []
     failures = []
-    mem = memory.system_memory()
+    observations = observations or {}
+    mem = observations.get("memory")
+    if mem is None:
+        mem = memory.system_memory()
     if mem.get("errors"):
         reasons.append("memory_probe_incomplete")
         failures.extend("memory:%s" % error for error in mem["errors"])
     if mem.get("pressure") not in ("normal", "warn", "critical"):
         reasons.append("memory_pressure_unknown")
 
-    batt = battery.battery_health()
+    batt = observations.get("battery")
+    if batt is None:
+        batt = battery.battery_health()
     if batt.get("probe_error"):
         reasons.append("battery_probe_incomplete")
         failures.append("battery:%s" % batt["probe_error"])
     if batt.get("pmset_error"):
         reasons.append("pmset_unavailable")
 
-    drives = []
     smartctl_bin = smart.probe.find_smartctl()
     physical = smart.probe.list_physical_drives()
+    drives = []
+    diskutil_available = physical is not None
     if physical is None:
         reasons.append("diskutil_unavailable")
         failures.append("smart:diskutil_unavailable")
@@ -256,7 +262,14 @@ def _collect_points():
     return {
         "memory": mem,
         "battery": batt,
-        "smart": {"drives": drives},
+        "smart": {
+            "available": diskutil_available,
+            "diskutil_available": diskutil_available,
+            "physical_drives_present": (
+                None if physical is None else bool(physical)),
+            "smartctl_available": smartctl_bin is not None,
+            "drives": drives,
+        },
     }, _unique(reasons), failures
 
 
@@ -272,6 +285,8 @@ def _current_document(sample, points=None):
     return {
         "recorded_at": sample.get("recorded_at"),
         "interval_s": sample.get("interval_s"),
+        "partial": sample.get("partial", False),
+        "partial_reasons": sample.get("partial_reasons", []),
         "context": sample.get("context"),
         "metrics": sample.get("metrics", []),
         "processes": sample.get("processes", []),
@@ -401,7 +416,12 @@ def run(mode, interval=DEFAULT_INTERVAL, limit=DEFAULT_LIMIT, since=None,
         except baseline.StoreError as exc:
            history_access_error = exc
     try:
-        sample = record.collect_interval(interval, limit)
+        if mode == "triage":
+            sample, observations = record.collect_interval_observed(
+                interval, limit)
+        else:
+            sample = record.collect_interval(interval, limit)
+            observations = None
         problem = baseline.validate_record(sample)
         if problem is not None:
            raise record.CollectionError("invalid live sample: %s" % problem)
@@ -445,11 +465,12 @@ def run(mode, interval=DEFAULT_INTERVAL, limit=DEFAULT_LIMIT, since=None,
 
     points = None
     if mode == "triage":
-        points, point_reasons, point_failures = _collect_points()
+        points, point_reasons, point_failures = _collect_points(observations)
         partial_reasons.extend(point_reasons)
         failures.extend(point_failures)
     findings, notes = analyze(
         mode, sample, state, history, points=points, limit=limit)
+    failures = _unique(failures)
     error = "; ".join(str(item) for item in failures) or None
     if any(not str(item).startswith("history:") for item in failures):
         partial_reasons.append("probe_failure")

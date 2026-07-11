@@ -556,13 +556,21 @@ All modes use the same stable result fields:
   "current": {
     "recorded_at": 1783769400.0,
     "interval_s": 1.01,
+    "partial": false,
+    "partial_reasons": [],
     "context": {},
     "metrics": [],
     "processes": [],
     "points": {
       "memory": {"pressure": "warn"},
       "battery": {"present": false},
-      "smart": {"drives": []}
+      "smart": {
+        "available": true,
+        "diskutil_available": true,
+        "physical_drives_present": false,
+        "smartctl_available": false,
+        "drives": []
+      }
     }
   },
   "error": null
@@ -609,6 +617,13 @@ condition, and SMART warnings. Unknown pressure is an info finding and partial,
 not healthy. No battery and no physical drives are supported states.
 `smartctl` absence is partial but optional; actual live/replay/probe failures
 set `error` and exit `4`.
+The SMART point structure distinguishes a working `diskutil` probe
+(`diskutil_available`), whether it enumerated any hardware
+(`physical_drives_present`), and optional `smartctl` availability. A failed
+`diskutil` probe uses `physical_drives_present: null`; an empty successful
+enumeration uses `false`. Triage reuses the memory and battery structures read
+while producing its raw interval, then probes SMART once; those point
+observations are not added to `baseline-raw/1`.
 
 History is consumed through an incremental JSONL scan. Corruption preserves up
 to 1024 `replay_errors` and exact `replay_error_count`/
@@ -625,6 +640,176 @@ was a recorder process.
 Exit is `1` only for a critical finding, `0` for clean/info/warn, `2` for
 invalid invocation (including invalid `--since`), and `4` for live collection,
 replay, store, or required probe failure.
+
+## `checkup`
+
+`checkup` is a one-shot full-body examination. It accepts exactly `--json`,
+`--interval N`, `--limit N`, `--since WHEN`, and `--store DIR`, with the same
+defaults, parsing, 60-second interval maximum, and 256-row maximum as `triage`.
+It rejects `--once`, `--duration`, all positionals, and unsupported flags.
+
+Checkup invokes canonical structured `triage` exactly once and does not
+reclassify findings or parse rendered text. Its `overall`, `findings`, `notes`,
+`partial`, `partial_reasons`, `history`, and `error` are the triage values,
+including finding order, history provenance, corruption diagnostics, and
+source-partial reasons.
+
+```json
+{
+  "schema": "stethoscope/1",
+  "scope": "checkup",
+  "command": "checkup",
+  "partial": true,
+  "partial_reasons": ["not_root", "smartctl_unavailable"],
+  "overall": "ok",
+  "findings": [],
+  "notes": [],
+  "history": {},
+  "sample": {
+    "recorded_at": 1783769400.0,
+    "interval_s": 1.01,
+    "privilege": "user",
+    "power_state": "battery",
+    "process_count": 12
+  },
+  "vitals": {
+    "cpu": {
+      "state": "partial",
+      "available": true,
+      "partial": true,
+      "rates": {
+        "cpu_pct": {"value": 18.0, "unit": "percent_of_one_core"},
+        "pkg_idle_wakeups_per_s": {"value": 3.0, "unit": "per_second"},
+        "interrupt_wakeups_per_s": {"value": 9.0, "unit": "per_second"}
+      },
+      "top_consumers": [
+        {
+          "pid": 500,
+          "start_ticks": 900,
+          "name": "worker",
+          "cpu_pct": 18.0,
+          "user_pct": 15.0,
+          "system_pct": 3.0,
+          "pkg_idle_wakeups_per_s": 3.0,
+          "interrupt_wakeups_per_s": 9.0
+        }
+      ]
+    },
+    "disk": {
+      "state": "partial",
+      "available": true,
+      "partial": true,
+      "rates": {
+        "read_bytes_per_s": {"value": 1024.0, "unit": "bytes_per_second"},
+        "write_bytes_per_s": {"value": 2048.0, "unit": "bytes_per_second"}
+      },
+      "top_consumers": [
+        {
+          "pid": 500,
+          "start_ticks": 900,
+          "name": "worker",
+          "diskio_bytes_read_per_s": 1024.0,
+          "diskio_bytes_written_per_s": 2048.0
+        }
+      ]
+    },
+    "memory": {
+      "state": "partial",
+      "available": true,
+      "partial": true,
+      "pressure": "normal",
+      "total_bytes": 17179869184,
+      "used_bytes": 8589934592,
+      "free_bytes": 4294967296,
+      "wired_bytes": 2147483648,
+      "compressed_bytes": 1073741824,
+      "errors": [],
+      "top_consumers": [
+        {
+          "pid": 500,
+          "start_ticks": 900,
+          "name": "worker",
+          "footprint_bytes": 536870912,
+          "resident_size_bytes": 603979776
+        }
+      ]
+    },
+    "battery": {
+      "state": "partial",
+      "available": true,
+      "partial": true,
+      "present": true,
+      "condition": "Normal",
+      "charge_pct": 81.0,
+      "health_pct": 92.0,
+      "cycle_count": 120,
+      "state_detail": "discharging",
+      "external_connected": false,
+      "battery_flow_watts": -7.2,
+      "probe_error": null,
+      "pmset_error": null,
+      "rates": {
+        "energy_rate_watts": {"value": 2.1, "unit": "watts"},
+        "energy_score_per_s": {
+          "value": null,
+          "unit": "unitless_per_second"
+        }
+      },
+      "top_consumers": [
+        {
+          "pid": 500,
+          "start_ticks": 900,
+          "name": "worker",
+          "cpu_pct": 18.0,
+          "energy_rate_watts": 2.1,
+          "energy_score_per_s": null
+        }
+      ]
+    },
+    "smart": {
+      "state": "partial",
+      "available": true,
+      "partial": true,
+      "diskutil_available": true,
+      "physical_drives_present": true,
+      "smartctl_available": false,
+      "drives": [
+        {
+          "device": "disk0",
+          "smart_status": "verified",
+          "smartctl_available": false,
+          "smartctl_detail": "smartctl not found",
+          "diskutil_detail": null,
+          "warnings": []
+        }
+      ]
+    }
+  },
+  "error": null
+}
+```
+
+Every vital always has `state`, `available`, and `partial`. `state` is
+`available`, `partial`, `unavailable`, or `absent`. `absent` is used only for a
+successfully observed lack of battery hardware or physical drives; it is not a
+healthy verdict. Failed or indeterminate probes are `unavailable`, and nullable
+measurements render as unknown in human output. CPU, disk, battery rates, and
+all process top-consumer arrays come from the same raw current interval.
+Memory and battery health plus SMART structures come from triage points.
+Top-consumer arrays exclude the exact sampler PID/start identity, are
+deterministically ranked by the corresponding activity, and are capped by
+`--limit`. Live vital state is derived from current probe and visibility state;
+historical source-partial reasons remain at the top level but do not downgrade
+an otherwise complete current vital.
+
+When no valid live sample exists, `sample` is `null`, CPU/disk are unavailable,
+and all five vital objects retain their stable fields. Usage JSON has the same
+shape with `partial_reasons: ["usage_error"]`. Human output sanitizes all
+external strings. JSON is one strict `allow_nan=false` document.
+
+Exit is `1` only for a critical canonical finding, `2` for invalid invocation,
+`4` for required live probe, replay, store, or runtime failure, and `0`
+otherwise.
 
 ## Recording corpus: `baseline-raw/1`
 
@@ -683,8 +868,10 @@ one line. Files are append-only and retained for 30 days by default.
 Stable system metrics cover CPU, both wakeup counters, disk read/write,
 memory used/free/wired/compressed, battery charge/health/flow, real energy
 where available, unitless energy score, and sampler CPU/footprint/resident.
-Nullable values remain present. Processes are the union of active top-N and
-footprint top-N plus the sampler, keyed by PID/start identity.
+Nullable values remain present. Processes are the PID/start-identity union of
+the top-N CPU, wakeup, disk, energy, and footprint rows plus the sampler.
+Activity floors keep rate-based groups meaningful; the sampler is excluded
+before each top-N limit and then added explicitly.
 `context.power_state` is normalized to `ac`, `battery`, or `unknown`.
 Rates, counters, percentages, and byte gauges must be nonnegative; battery
 flow is the signed exception (negative while discharging).
@@ -745,5 +932,5 @@ cold, and exit 0.
 ## Changelog
 
 - `stethoscope/1`: stable common envelope and
-  disk/CPU/memory/battery/SMART/record/history/triage/anomaly contracts.
+  disk/CPU/memory/battery/SMART/record/history/triage/anomaly/checkup contracts.
 - `baseline-raw/1`: append-only daily recording corpus.

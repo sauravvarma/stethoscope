@@ -159,15 +159,7 @@ def _process_rows(previous, current, elapsed, coeffs, limit,
             "footprint_bytes": sample.get("phys_footprint_bytes"),
             "resident_size_bytes": sample.get("resident_size_bytes"),
         }
-        activity = (
-            cpu_pct >= ACTIVE_CPU_FLOOR
-            or pkg + intr >= ACTIVE_WAKEUP_FLOOR
-            or read + write >= ACTIVE_DISK_FLOOR
-            or (watts is not None and watts >= ACTIVE_ENERGY_FLOOR)
-            or (score is not None and score > 0))
-        rank = (
-            score or 0.0, watts or 0.0, cpu_pct, pkg + intr, read + write)
-        candidates.append((row, activity, rank))
+        candidates.append(row)
         system["cpu_pct"] += cpu_pct
         system["pkg_idle_wakeups_per_s"] += pkg
         system["interrupt_wakeups_per_s"] += intr
@@ -179,17 +171,49 @@ def _process_rows(previous, current, elapsed, coeffs, limit,
         if score is not None and system["energy_score_per_s"] is not None:
             system["energy_score_per_s"] += score
 
-    active = sorted(
-        (item for item in candidates if item[1]),
-        key=lambda item: tuple(-number for number in item[2]))[:limit]
-    footprint = sorted(
-        candidates,
-        key=lambda item: -(item[0]["footprint_bytes"] or 0))[:limit]
-    selected = {}
-    for row, _, _ in active + footprint:
-        selected[(row["pid"], row["start_ticks"])] = row
     own_pid = os.getpid()
-    for row, _, _ in candidates:
+    non_sampler = [
+        row for row in candidates if row["pid"] != own_pid
+    ]
+    ranked_groups = (
+        sorted(
+            (row for row in non_sampler
+             if row["cpu_pct"] >= ACTIVE_CPU_FLOOR),
+            key=lambda row: (-row["cpu_pct"], row["pid"]))[:limit],
+        sorted(
+            (row for row in non_sampler
+             if (row["pkg_idle_wakeups_per_s"]
+                 + row["interrupt_wakeups_per_s"]) >= ACTIVE_WAKEUP_FLOOR),
+            key=lambda row: (
+                -(row["pkg_idle_wakeups_per_s"]
+                  + row["interrupt_wakeups_per_s"]),
+                row["pid"]))[:limit],
+        sorted(
+            (row for row in non_sampler
+             if (row["diskio_bytes_read_per_s"]
+                 + row["diskio_bytes_written_per_s"]) >= ACTIVE_DISK_FLOOR),
+            key=lambda row: (
+                -(row["diskio_bytes_read_per_s"]
+                  + row["diskio_bytes_written_per_s"]),
+                row["pid"]))[:limit],
+        sorted(
+            (row for row in non_sampler
+             if ((row["energy_rate_watts"] or 0.0) >= ACTIVE_ENERGY_FLOOR
+                 or (row["energy_score_per_s"] or 0.0) > 0.0)),
+            key=lambda row: (
+                -(row["energy_score_per_s"] or 0.0),
+                -(row["energy_rate_watts"] or 0.0),
+                -row["cpu_pct"], row["pid"]))[:limit],
+        sorted(
+            non_sampler,
+            key=lambda row: (
+                -(row["footprint_bytes"] or 0), row["pid"]))[:limit],
+    )
+    selected = {}
+    for group in ranked_groups:
+        for row in group:
+            selected[(row["pid"], row["start_ticks"])] = row
+    for row in candidates:
         if row["pid"] == own_pid:
             selected[(row["pid"], row["start_ticks"])] = row
             break
@@ -205,9 +229,9 @@ def _metric(scope, name, value, unit):
     return {"scope": scope, "metric": name, "value": value, "unit": unit}
 
 
-def collect_interval(interval, limit=DEFAULT_LIMIT, sleeper=time.sleep,
-                     wall_time=time.time, monotonic=time.monotonic):
-    """Collect one completed interval using one libproc struct read per PID/poll."""
+def collect_interval_observed(interval, limit=DEFAULT_LIMIT, sleeper=time.sleep,
+                              wall_time=time.time, monotonic=time.monotonic):
+    """Collect one interval and expose point observations already read."""
     interval_start_ticks = rusage.mach_absolute_time()
     first_started = monotonic()
     previous = battery.snapshot_power()
@@ -329,7 +353,7 @@ def collect_interval(interval, limit=DEFAULT_LIMIT, sleeper=time.sleep,
         },
         "coverage": coverage,
     }
-    return {
+    sample = {
         "schema": baseline.RAW_SCHEMA,
         "recorded_at": recorded_at,
         "interval_s": elapsed,
@@ -340,6 +364,16 @@ def collect_interval(interval, limit=DEFAULT_LIMIT, sleeper=time.sleep,
         "partial": bool(reasons),
         "partial_reasons": reasons,
     }
+    return sample, {"memory": memory, "battery": health}
+
+
+def collect_interval(interval, limit=DEFAULT_LIMIT, sleeper=time.sleep,
+                     wall_time=time.time, monotonic=time.monotonic):
+    """Collect one completed interval using one libproc struct read per PID/poll."""
+    sample, _ = collect_interval_observed(
+        interval, limit, sleeper=sleeper, wall_time=wall_time,
+        monotonic=monotonic)
+    return sample
 
 
 def _record_document(sample, store, stored=True, error=None,

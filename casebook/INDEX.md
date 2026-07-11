@@ -13,5 +13,5 @@
 | [0007](0007-memory-scope.md) | memory scope — footprint ranking + leak watch | treated | 2026-07-11 | 2026-07-11 | 7 |
 | [0008](0008-smart-scope.md) | smart scope | treated | 2026-07-11 | 2026-07-11 | 10 |
 | [0009](0009-battery-scope.md) | battery scope — health, energy top, unplug drainers | treated | 2026-07-11 | 2026-07-11 | 14 |
-| [0010](0010-recording-baselines.md) | recording, history, and hourly baselines | treated | 2026-07-11 | 2026-07-11 | 11 |
-| [0011](0011-diagnosis-triage.md) | diagnosis and triage composition | treated | 2026-07-11 | 2026-07-11 | 7 |
+| [0010](0010-recording-baselines.md) | recording, history, and hourly baselines | treated | 2026-07-11 | 2026-07-11 | 12 |
+| [0011](0011-diagnosis-triage.md) | diagnosis and triage composition | treated | 2026-07-11 | 2026-07-11 | 9 |

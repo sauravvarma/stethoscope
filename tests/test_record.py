@@ -86,6 +86,25 @@ class StoreCase(TempCorpusMixin, unittest.TestCase):
         self.assertEqual(payload.count(b"\n"), 1)
         self.assertEqual(json.loads(payload)["schema"], baseline.RAW_SCHEMA)
 
+    def test_maximum_retained_union_fits_raw_line_bound(self):
+        item = raw()
+        template = item["processes"][0]
+        item["processes"] = [
+            {
+                **template,
+                "pid": 10000 + index,
+                "start_ticks": index + 1,
+                "name": "x" * 255,
+                "normalized_name": "x" * 255,
+            }
+            for index in range(5 * record.MAX_LIMIT + 1)
+        ]
+        self.append(item)
+        filename = os.path.join(
+            self.path, baseline.daily_name(item["recorded_at"]))
+        self.assertLessEqual(
+            os.path.getsize(filename), baseline.MAX_RAW_LINE_BYTES)
+
     def test_append_never_rewrites_existing_lines(self):
         self.append(raw(1000, 1), raw(1001, 2))
         replay = baseline.replay(self.path, 0)
@@ -478,7 +497,7 @@ class CollectionCase(unittest.TestCase):
              mock.patch.object(record.rusage, "proc_name",
                                return_value="Python Helper (Renderer)"), \
              mock.patch.object(record.cli, "is_root", return_value=False):
-            sample = record.collect_interval(
+            sample, observations = record.collect_interval_observed(
                 17.25, sleeper=sleeper,
                 monotonic=mock.Mock(
                     side_effect=[10.0, 10.0, 27.25, 27.25]),
@@ -496,8 +515,27 @@ class CollectionCase(unittest.TestCase):
             if metric["scope"] == "sampler"
             and metric["metric"] == "footprint_bytes")
         self.assertEqual(footprint["value"], 100)
+        self.assertIs(observations["memory"], memory)
+        self.assertIs(observations["battery"], health)
+        self.assertNotIn("observations", sample)
 
-    def test_active_and_footprint_union_is_bounded(self):
+    def test_observed_collection_exposes_reused_points_only(self):
+        sample = raw()
+        observations = {
+            "memory": {"pressure": "normal"},
+            "battery": {"present": False},
+        }
+        with mock.patch.object(
+                record, "collect_interval_observed",
+                return_value=(sample, observations)) as observed:
+            result = record.collect_interval(4, 7)
+        self.assertIs(result, sample)
+        observed.assert_called_once_with(
+            4, 7, sleeper=record.time.sleep, wall_time=record.time.time,
+            monotonic=record.time.monotonic)
+        self.assertNotIn("observations", result)
+
+    def test_per_domain_and_footprint_union_is_bounded(self):
         previous = {}
         current = {}
         for pid in range(1, 101):
@@ -508,7 +546,58 @@ class CollectionCase(unittest.TestCase):
                                side_effect=lambda pid, identity: "p%d" % pid):
             rows, _, _ = record._process_rows(
                 previous, current, 1.0, None, 5)
-        self.assertLessEqual(len(rows), 10)
+        self.assertLessEqual(len(rows), 26)
+
+    def test_per_domain_leaders_survive_raw_limit(self):
+        identities = {
+            "cpu": (10001, 1),
+            "wakeups": (10002, 1),
+            "disk": (10003, 1),
+            "energy": (10004, 1),
+            "memory": (10005, 1),
+        }
+        previous = {
+            identity: self.sample(identity)
+            for identity in identities.values()
+        }
+        current = {
+            identity: self.sample(identity)
+            for identity in identities.values()
+        }
+        current[identities["cpu"]]["cpu_user_ns"] = 900_000_000
+        current[identities["wakeups"]]["pkg_idle_wakeups"] = 900
+        current[identities["disk"]]["diskio_bytes_written"] = 1_000_000_000
+        previous[identities["energy"]]["energy_nj"] = 0
+        current[identities["energy"]]["energy_nj"] = 100_000_000_000
+        current[identities["memory"]]["phys_footprint_bytes"] = 10_000
+        with mock.patch.object(
+                record.rusage, "proc_name",
+                side_effect=lambda pid, identity: "p%d" % pid):
+            rows, _, _ = record._process_rows(
+                previous, current, 1.0, None, 1)
+        self.assertEqual(
+            {(row["pid"], row["start_ticks"]) for row in rows},
+            set(identities.values()))
+
+    def test_sampler_does_not_consume_footprint_limit(self):
+        sampler = (os.getpid(), 1)
+        worker = (10001, 1)
+        previous = {
+            sampler: self.sample(sampler, footprint=1000),
+            worker: self.sample(worker, footprint=500),
+        }
+        current = {
+            sampler: self.sample(sampler, footprint=1000),
+            worker: self.sample(worker, footprint=500),
+        }
+        with mock.patch.object(
+                record.rusage, "proc_name",
+                side_effect=lambda pid, identity: "p%d" % pid):
+            rows, _, _ = record._process_rows(
+                previous, current, 1.0, None, 1)
+        self.assertEqual(
+            {(row["pid"], row["start_ticks"]) for row in rows},
+            {sampler, worker})
 
     def test_process_started_during_interval_is_zero_based(self):
         identity = (42, 100)

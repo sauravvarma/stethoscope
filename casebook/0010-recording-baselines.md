@@ -134,3 +134,19 @@ The shared parser accepted `record --store --once` by treating `--once` as the
 directory and then starting the default indefinite loop. String-valued options
 now reject a following option token as a missing value, so both `--store` and
 `--since` fail with usage exit 2 instead of consuming control flags.
+
+## 0010.12 · 2026-07-11 · failure — mixed-unit retention lost scope leaders
+
+The first bounded process union sorted active rows lexicographically by energy,
+watts, CPU, wakeups, and disk. With a small limit, an energy row could displace
+the actual disk or CPU leader before checkup or history saw it, and the sampler
+could consume a footprint slot before presentation excluded it. The collector
+still performs one endpoint read, but now retains the bounded identity union of
+per-domain CPU, wakeup, disk, energy, and footprint top-N rows. The sampler is
+excluded before those limits and added explicitly afterward. This raises the
+worst-case raw bound from `2N + 1` to `5N + 1` (1281 at the accepted maximum),
+still below raw validation's 4096-process ceiling, while making every
+downstream per-scope ranking complete. The bounded line ceiling is 4 MiB so the
+maximum production union still fits when every executable basename reaches the
+filesystem's 255-byte component limit; oversized hostile input remains
+rejected and replayed with bounded memory.

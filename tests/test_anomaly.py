@@ -427,7 +427,11 @@ class RunCase(unittest.TestCase):
             "smart": {"drives": []},
         }
         with mock.patch.object(
-                record, "collect_interval", return_value=sample), \
+                record, "collect_interval_observed",
+                return_value=(sample, {
+                    "memory": points["memory"],
+                    "battery": points["battery"],
+                })), \
              mock.patch.object(
                  anomaly, "scan_history",
                  side_effect=baseline.StoreError("unreadable")), \
@@ -441,6 +445,30 @@ class RunCase(unittest.TestCase):
         self.assertTrue(document["findings"])
         self.assertIsNotNone(document["current"]["points"])
         self.assertFalse(document["history"]["available"])
+
+    def test_reused_probe_failure_is_reported_once(self):
+        sample = raw(partial_reasons=["memory:vm_stat_failed"])
+        state = anomaly.HistoryState(sample)
+        history = anomaly._empty_history("store", 0)
+        points = {
+            "memory": {"available": False, "errors": ["vm_stat_failed"]},
+            "battery": {"present": False},
+            "smart": {"drives": []},
+        }
+        with mock.patch.object(
+                record, "collect_interval_observed",
+                return_value=(sample, {})), \
+             mock.patch.object(
+                 anomaly, "scan_history", return_value=(state, history)), \
+             mock.patch.object(
+                 anomaly, "_collect_points",
+                 return_value=(
+                     points, ["memory:vm_stat_failed"],
+                     ["memory:vm_stat_failed"])):
+            document, rc = anomaly.run(
+                "triage", since=0, store="store", scope="triage")
+        self.assertEqual(rc, cli.EXIT_ERROR)
+        self.assertEqual(document["error"], "memory:vm_stat_failed")
 
     def test_optional_pmset_partial_reason_is_not_fatal(self):
         sample = raw(partial_reasons=["battery:pmset_failed"])

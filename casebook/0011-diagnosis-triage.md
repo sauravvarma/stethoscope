@@ -2,7 +2,7 @@
 status: treated
 opened: 2026-07-11
 links: case 0002 · case 0004 · case 0010 · ARCHITECTURE.md §6
-touches: core/stats.py, diagnosis/taxonomy.py, diagnosis/rules.py, scopes/anomaly.py
+touches: core/stats.py, diagnosis/taxonomy.py, diagnosis/rules.py, scopes/anomaly.py, scopes/checkup.py
 
 ## 0011.1 · 2026-07-11 · hypothesis
 
@@ -66,3 +66,27 @@ and runaway targets and process baselines. If replay only discovers later that
 an earlier contributor was a sampler, the affected name bucket is reset
 conservatively; dedicated sampler system metrics remain available for overhead
 monitoring.
+
+## 0011.8 · 2026-07-11 · follow-up — one diagnosis, two presentations
+
+Issue #25 adds `checkup` as a second presentation of this same composition
+node, not a competing classifier. It invokes structured triage once, preserves
+its ordered findings, overall verdict, notes, partial reasons, provenance, and
+error/exit behavior, then derives full-body vitals from the same raw interval
+and triage point structures. The interval collector now exposes its already-read
+memory and battery observations outside the persisted `baseline-raw/1` sample;
+triage reuses them and probes SMART once. Explicit states distinguish unknown
+probes from supported absence of a battery or physical drives, so degraded
+visibility cannot become success-shaped health.
+
+## 0011.9 · 2026-07-11 · failure — provenance leaked into live vital state
+
+The first checkup composition used triage's aggregate partial reasons for live
+CPU and disk state. Historical `not_root` records could therefore label a
+complete current root sample partial. It also ranked the observer in consumer
+lists and omitted the already-collected process footprints from memory. The
+current triage structure now retains its own partial state separately from
+history provenance; checkup uses only current visibility for process-backed
+vitals, excludes the exact sampler PID/start identity from every ranking, and
+exposes memory consumers without another probe. Reused point failures are
+deduplicated before constructing the canonical runtime error.

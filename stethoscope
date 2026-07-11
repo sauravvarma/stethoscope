@@ -13,6 +13,7 @@ reusable data layer in scopes/<name>.py.
   stethoscope memory <cmd>    footprint, pressure, leak candidates
   stethoscope battery <cmd>   health, energy attribution, unplug drainers
   stethoscope smart [disk]    drive health, wear, pre-failure warnings
+  stethoscope checkup         one-shot full-body examination
   stethoscope triage          ranked anomaly diagnosis
   stethoscope anomaly <cmd>   deviation, leaks, runaway, or triage
   stethoscope record          append live vitals to a local JSONL corpus
@@ -54,6 +55,7 @@ scopes:
             inspect         richer powermetrics detail (sudo)
   smart   physical-drive health and endurance
             status [disk]   SMART verdict, wear, life, and warnings
+  checkup one-shot full-body exam and canonical diagnosis
   triage  one-shot baseline deviation, leaks, runaways, and point health
   anomaly one-shot detector: deviation, leaks, runaway, or triage
   record  foreground sampler (launchd-friendly; default interval 60s)
@@ -76,6 +78,7 @@ SCOPES = {
     "memory": {"module": "scopes.memory"},
     "battery": {"module": "scopes.battery"},
     "smart": {"module": "scopes.smart"},
+    "checkup": {"module": "scopes.checkup"},
     "triage": {"module": "scopes.anomaly"},
     "anomaly": {"module": "scopes.anomaly"},
     "record": {"module": "scopes.record"},
