@@ -124,7 +124,7 @@ def rank_io(prev, cur, dt):
         sys_dr += dr
         sys_dw += dw
         if dr > 0 or dw > 0:
-            rows.append((dr + dw, dr, dw, r, w, pid, proc_name(pid)))
+            rows.append((dr + dw, dr, dw, r, w, pid, proc_name(pid, key)))
     rows.sort(reverse=True)
     return rows, sys_dr, sys_dw
 
@@ -286,7 +286,7 @@ def resolve_volume(arg):
             targets.append((dev, mp))
         elif dev == dev_arg:                               # exact device node
             targets.append((dev, mp))
-        elif arg.startswith("disk") and dev.startswith(dev_arg):  # whole disk -> all slices
+        elif arg.startswith("disk") and dev.startswith(dev_arg + "s"):  # whole disk -> slices
             targets.append((dev, mp))
     # de-dup preserving order
     seen = set()

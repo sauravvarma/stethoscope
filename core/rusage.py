@@ -299,15 +299,25 @@ def proc_identity(pid):
 _name_cache = {}
 
 
-def proc_name(pid):
-    """Best-effort short command name for pid (cached)."""
-    if pid in _name_cache:
-        return _name_cache[pid]
+def proc_name(pid, identity=None):
+    """Best-effort short command name, cached by process identity.
+
+    A bare pid is not stable: macOS reuses it after a process exits. Callers
+    that already sampled ``(pid, start_abstime)`` can pass that identity and
+    avoid another rusage read.
+    """
+    identity = identity if identity is not None else proc_identity(pid)
+    cache_key = identity if identity is not None else (pid, None)
+    cached = _name_cache.get(cache_key)
+    if cached is not None:
+        return cached
     buf = ctypes.create_string_buffer(PROC_PIDPATHINFO_MAXSIZE)
     n = _libc.proc_pidpath(ctypes.c_int(pid), buf, PROC_PIDPATHINFO_MAXSIZE)
     if n > 0:
         name = os.path.basename(buf.value.decode("utf-8", "replace"))
     else:
         name = "?"
-    _name_cache[pid] = name
+    for key in [key for key in _name_cache if key[0] == pid and key != cache_key]:
+        del _name_cache[key]
+    _name_cache[cache_key] = name
     return name

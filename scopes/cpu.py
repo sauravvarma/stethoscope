@@ -119,7 +119,7 @@ def rank_cpu(prev, cur, dt):
         sys_cpu += cpu_pct
         if du + ds > 0 or (watts or 0) > 0:
             rows.append((cpu_pct, du / dt_ns * 100.0, ds / dt_ns * 100.0,
-                         watts, u + s, key[1], key[0], proc_name(key[0])))
+                         watts, u + s, key[1], key[0], proc_name(key[0], key)))
     rows.sort(key=lambda r: -r[0])
     return rows, sys_cpu, sys_watts
 

@@ -65,3 +65,15 @@ duty = CPU / awake-time is the honest denominator (a process can't burn
 CPU while the machine sleeps). §4's `lifetime_duty` definition updated to
 say "awake-age" explicitly; anything comparing rusage ages to wall-clock
 timestamps (pmset log segments, baselines' hour buckets) must convert.
+
+## 0003.8 · 2026-07-11 · follow-up — names follow process identity
+
+The v0.2 diff loops correctly key counters by `(pid, start_abstime)`, but
+`proc_name` still cached by bare pid. A long-running surface could therefore
+attach a dead process's name to the next process assigned that pid. A TTL
+would only narrow the wrong-name window and add arbitrary timing policy.
+The cache now uses the same kernel identity as the samplers, prunes an old
+identity when a pid is reused, and accepts an already sampled identity so
+ranking does not pay for a second rusage call. A hermetic regression drives
+one pid through two start times and verifies that only the identity change
+re-resolves its path.
