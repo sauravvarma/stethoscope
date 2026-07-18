@@ -9,3 +9,4 @@
 | [0003](0003-rusage-probe-contract.md) | the rusage probe contract | treated | 2026-07-10 | 2026-07-10 | 7 |
 | [0004](0004-wakeup-alarm-signal.md) | which wakeup counter alarms wakeup-storm | treated | 2026-07-10 | 2026-07-10 | 7 |
 | [0005](0005-cpu-scope.md) | cpu scope — who is burning CPU now | treated | 2026-07-10 | 2026-07-10 | 8 |
+| [0006](0006-parallel-series-reconciliation.md) | reconciling the krishankumar95 parallel series | diagnosed | 2026-07-10 | 2026-07-10 | 7 |
