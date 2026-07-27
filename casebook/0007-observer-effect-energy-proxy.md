@@ -246,3 +246,60 @@ alongside the sample so the contamination is at least auditable after the
 fact. This is a live hazard for the agent loop described in README.md
 "For AI agents", where the agent is by construction the thing generating
 terminal output while sampling.
+
+## 0007.11 · 2026-07-27 · follow-up — the remediation was deliberate, and the observer also holds a sleep assertion
+
+Corrects 0007.4: the closing paragraph states "no deliberate remediation; the
+page simply stopped". That is wrong. The operator had closed Arc, Safari, and
+a number of long-lived Claude Code sessions. The cessation was an
+intervention, not a coincidence, which upgrades the evidence from an
+observed correlation to a controlled test of the 0007.4 diagnosis.
+
+Measured after the intervention, with `battery top` redirected to a file
+rather than a tty (applying 0007.10):
+
+| vital | before | after | change |
+|---|---:|---:|---|
+| battery draw | 25.7 W | **6.11 W** | −76% |
+| visible wakeups/s (median) | 975.4 | **346.9** | −64% |
+| battery temperature | 30.9 °C | 30.6 °C | |
+| runtime estimate | 2:23 | 5:22 | |
+
+`coreaudiod`, `AppleCentauriAlpha` and `AppleCentauriBeta` are absent from
+both the ranking and `pmset -g assertions`. Arc is absent entirely. The
+0007.4 causal chain is confirmed by removal.
+
+**The new finding.** With the audio assertion gone, the only remaining
+`PreventUserIdleSystemSleep` holder is:
+
+```
+pid 59546(caffeinate): PreventUserIdleSystemSleep "caffeinate command-line tool"
+  Details: caffeinate asserting for 300 secs
+  ppid 56465 (claude), argv: caffeinate -i -t 300
+```
+
+The agent session spawns `caffeinate -i` and renews it on a 300 s timer, so
+for as long as an agent is alive the machine **cannot idle-sleep**. This is a
+second, distinct observer effect, and a more serious one than 0007.2: the
+first injects wakeups into the ranking, this one changes the power state of
+the system under measurement. Every battery measurement taken during an agent
+session is taken on a machine that has been prevented from sleeping, and
+sleep is the single largest lever on both drain and temperature.
+
+Two consequences:
+
+- It strengthens 0007.7 from "would have found the answer" to "is required".
+  The scope must surface assertion holders partly so that **its own
+  invocation's assertion appears in its own output**. A tool that cannot show
+  the operator perturbing the measurement is not honest about its numbers.
+- `drainers` is unusable as specified when run under an agent. Its window is
+  by definition a window in which the machine could not sleep, so its
+  cumulative totals describe a counterfactual machine. This is a stronger
+  objection than 0007.3 and should be resolved before pr08 merges.
+
+Not fully remediated: five agent sessions aged 9, 10, 17 and 18 days are still
+running, each carrying its own caffeinate capability. The intervention was
+partial, which is consistent with the residual 346.9 wakeups/s still being
+dominated by agent-related processes.
+
+
