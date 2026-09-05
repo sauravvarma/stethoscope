@@ -303,3 +303,56 @@ partial, which is consistent with the residual 346.9 wakeups/s still being
 dominated by agent-related processes.
 
 
+
+## 0007.12 · 2026-09-05 · follow-up — the ground truth this case rests on is unreachable by an agent
+
+Case 0008 re-diagnosed this machine on 2026-09-05 and hit a constraint that
+bears directly on this case's method rather than on its subject.
+
+Every quantitative claim in 0007.2, 0007.4 and 0007.11 is anchored to root
+`powermetrics` as ground truth: the proxy is wrong *because* powermetrics
+ranks ghostty seventh, the causal chain is confirmed *because* powermetrics
+attributes 302 wakeups/s to the audio path. ARCHITECTURE.md §3 formalises
+this by placing `powermetrics` in the inspect tier, and README's "For AI
+agents" describes a loop in which an agent notices a symptom, calls probes,
+and proposes a diagnosis with a drill-down command to confirm it.
+
+**An agent cannot run that drill-down.** `sudo` requires a TTY to prompt for
+a password, and the agent's shell has none. Measured on 2026-09-05, four
+invocations from inside a Claude Code session:
+
+```
+sudo powermetrics ...        sudo: a terminal is required to read the password
+sudo powermetrics ... -D     sudo: a terminal is required to read the password
+sudo powermetrics ... -S     sudo: a terminal is required to read the password
+sudo -S powermetrics ...     Password:
+                             sudo: no password was provided
+```
+
+The fourth is the informative one: sudo reached its prompt and found no stdin
+to read from. This is not a missing flag, and no flag combination resolves it.
+The operator obtained the 0008.2 numbers by running the command in a separate
+interactive terminal and pasting the output back.
+
+Consequences for this case and for the agent contract:
+
+- **0007's own evidence could not have been gathered autonomously.** The
+  entries stand, since a human ran the commands, but the loop described in
+  README cannot reproduce them unattended. Any `verify` string in a `Finding`
+  (§7) that names a root command is an instruction the agent must hand back
+  to a human, not one it can execute.
+- **`Finding` needs to say so.** `remediation` already carries
+  `reversible`; `verify` carries no equivalent. A field distinguishing
+  agent-executable drill-downs from human-only ones would make the contract
+  honest, and would let a surface render "run this yourself" rather than
+  failing opaquely.
+- **It raises the value of free, unprivileged probes.** 0008.4 measured
+  `ioreg -c IOAccelerator` at 10 to 20 ms with no root. Probes an agent can
+  actually reach are worth more per unit of information than richer ones it
+  cannot, and §3's cost column should arguably carry a privilege-reachability
+  note alongside the timing.
+
+This does not weaken 0007.10's methodological note, it compounds it. The agent
+both perturbs the measurement (0007.2), changes the power state of the system
+under measurement (0007.11), and cannot access the instrument that would
+adjudicate either (this entry).
