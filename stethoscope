@@ -10,7 +10,8 @@ reusable data layer in scopes/<name>.py.
 
   stethoscope disk <cmd>      per-process disk I/O, holds, eject blockers
   stethoscope cpu <cmd>       per-process CPU, live power, lifetime duty
-  (planned: memory, battery, smart — see the repo roadmap)
+  stethoscope gpu <cmd>       GPU residency, frequency, watts; who holds it
+  (planned: memory, battery, smart, network — see the repo roadmap)
 
 No third-party dependencies — system Python 3 only.
 """
@@ -34,12 +35,18 @@ scopes:
   cpu     per-process CPU visibility
             top             who is burning CPU now (default) — %CPU, live
                             watts, lifetime CPU time and duty
+  gpu     GPU visibility (no root needed)
+            top             what the GPU is doing and who holds it (default)
+                            busy %, active residency, MHz, watts, memory;
+                            per-process GPU% and lifetime GPU time; the
+                            share of busy time no live process accounts for
 
-planned scopes: memory, battery, smart  (see roadmap)
+planned scopes: memory, battery, smart, network  (see roadmap)
 
 examples:
   sudo ./stethoscope disk top
   sudo ./stethoscope cpu top
+  ./stethoscope gpu top
   sudo ./stethoscope disk busy "/Volumes/X9 Pro"
   sudo -E ./stethoscope disk tui
 """
@@ -64,6 +71,10 @@ def main(argv):
     if scope == "cpu":
         from scopes import cpu
         return cpu.main(["stethoscope cpu"] + args)
+
+    if scope == "gpu":
+        from scopes import gpu
+        return gpu.main(["stethoscope gpu"] + args)
 
     sys.stderr.write("unknown scope: %s\n\n%s" % (scope, USAGE))
     return 2

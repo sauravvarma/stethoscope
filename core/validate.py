@@ -42,14 +42,38 @@ def report(status, name, detail):
     print("%s%-4s%s  %-28s %s" % (style, tag, RESET, name, detail))
 
 
-def sdk_header_path():
+def sdk_header_path(rel="sys/resource.h"):
     try:
         sdk = subprocess.run(["/usr/bin/xcrun", "--show-sdk-path"],
                              capture_output=True, text=True, timeout=10).stdout.strip()
     except Exception:
         return None
-    path = os.path.join(sdk, "usr/include/sys/resource.h")
+    path = os.path.join(sdk, "usr/include", rel)
     return path if os.path.isfile(path) else None
+
+
+_C_SIZES = {"uint8_t": 1, "int32_t": 4, "uint32_t": 4, "uid_t": 4, "gid_t": 4,
+            "uint64_t": 8, "char": 1}
+
+
+def parse_proc_bsdinfo_header(path):
+    """[(field_name, byte_size)] of struct proc_bsdinfo from sys/proc_info.h.
+    MAXCOMLEN is 16 (sys/param.h); the header uses it symbolically."""
+    with open(path) as f:
+        text = f.read()
+    m = re.search(r"struct proc_bsdinfo \{(.*?)\};", text, re.S)
+    if not m:
+        return None
+    fields = []
+    for ln in m.group(1).splitlines():
+        fm = re.match(r"\s*(\w+)\s+(\w+)(?:\[([^\]]+)\])?;", ln)
+        if not fm or fm.group(1) not in _C_SIZES:
+            continue
+        count = 1
+        if fm.group(3):
+            count = eval(fm.group(3).replace("MAXCOMLEN", "16"), {}, {})   # "2 * MAXCOMLEN"
+        fields.append((fm.group(2), _C_SIZES[fm.group(1)] * count))
+    return fields
 
 
 def parse_header_struct(path, version):
@@ -314,6 +338,120 @@ def check_pmenergy():
     print(DIM + "      keys: %s" % ", ".join(keys) + RESET)
 
 
+def check_proc_bsdinfo():
+    header = sdk_header_path("sys/proc_info.h")
+    if not header:
+        report("SKIP", "proc_bsdinfo struct", "no SDK header; sizeof asserted at import (136)")
+        return
+    parsed = parse_proc_bsdinfo_header(header)
+    ours = [n for n, _ in rusage.ProcBSDInfo._fields_]
+    theirs = [n for n, _ in parsed] if parsed else None
+    size, expected = ctypes.sizeof(rusage.ProcBSDInfo), sum(s for _, s in parsed or [])
+    if parsed and ours == theirs and size == expected:
+        report("PASS", "proc_bsdinfo struct",
+               "%d fields match SDK header, sizeof %d == %d" % (len(ours), size, expected))
+    else:
+        report("FAIL", "proc_bsdinfo struct",
+               "header %s fields / %d B vs ours %d fields / %d B"
+               % (len(theirs) if theirs else "?", expected, len(ours), size))
+
+
+def check_proc_state():
+    # A real zombie: fork, let it exit, do not reap. The kernel must refuse
+    # bsdinfo (ESRCH) while rusage still answers (casebook 0008.11).
+    pid = os.fork()
+    if pid == 0:
+        os._exit(0)
+    deadline = time.time() + 2.0
+    while rusage.proc_state(pid) == rusage.ALIVE and time.time() < deadline:
+        time.sleep(0.01)
+    status, err = rusage.proc_status(pid)
+    ru = rusage._raw_rusage(pid) is not None
+    zombie_state = rusage.proc_state(pid)
+    os.waitpid(pid, 0)
+    after = rusage.proc_state(pid)
+    ok = zombie_state == rusage.EXITED and after == rusage.GONE
+    report("PASS" if ok else "FAIL", "proc_state",
+           "unreaped child: bsdinfo status=%s errno=%d rusage=%s -> %s; after reap -> %s; "
+           "pid 1 (launchd, not ours) -> %s"
+           % (status, err, "OK" if ru else "None", zombie_state, after, rusage.proc_state(1)))
+
+
+def check_gpu_registry():
+    from core import ioaccel
+    t0 = time.perf_counter()
+    snap = ioaccel.gpu_snapshot()
+    ms = (time.perf_counter() - t0) * 1000
+    if snap is None:
+        report("SKIP", "IOAccelerator", "no IOAccelerator node: gpu scope degrades to 'no GPU'")
+        return
+    dev = snap["devices"][0]
+    have = [k for k in ("util_pct", "renderer_pct", "tiler_pct", "mem_inuse", "mem_alloc")
+            if dev[k] is not None]
+    clients = snap["clients"]
+    with_queues = sum(1 for c in clients.values() if c["queues"])
+    exited = [(pid, c["name"], c["queues"]) for pid, c in clients.items()
+              if rusage.proc_state(pid) in (rusage.EXITED, rusage.GONE)]
+    ok = len(have) == 5 and clients
+    report("PASS" if ok else "FAIL", "IOAccelerator",
+           "%s (%s cores) %s; util %s%%; %d device clients, %d holding queues; %.0f ms per snapshot"
+           % (dev["model"], dev["cores"], dev["class"], dev["util_pct"], len(clients),
+              with_queues, ms))
+    if exited:
+        print(DIM + "      clients whose owner has exited: %s" % exited + RESET)
+    t0 = time.perf_counter()
+    table = ioaccel.gpu_pstate_mhz()
+    ms = (time.perf_counter() - t0) * 1000
+    if table:
+        report("PASS" if table[0] == 0 and table[1:] == sorted(table[1:]) else "FAIL",
+               "pmgr GPU P-states", "%d states, OFF first: %s MHz; %.0f ms"
+               % (len(table), [int(x) for x in table], ms))
+    else:
+        report("INFO", "pmgr GPU P-states", "voltage-states9 absent: states labelled P1..Pn")
+
+
+def check_gpu_ioreport():
+    from core import ioreport
+    if not ioreport.AVAILABLE:
+        report("SKIP", "IOReport GPU", "unavailable (%s): residency/MHz/watts read '-'"
+               % ioreport.why_unavailable())
+        return
+    rep = ioreport.GPUReporter()
+    if not rep.available:
+        report("SKIP", "IOReport GPU", "no GPU channels (%s): residency/MHz/watts read '-'" % rep.reason)
+        return
+    from core import ioaccel
+    table = ioaccel.gpu_pstate_mhz()
+    # 3 x 1 s: the residency clock must sum to 24e6 ticks/s, and the energy
+    # counter must move. Saturation (100% active on every sample) is a
+    # legitimate reading, never a reason to distrust the probe (casebook 0008.4).
+    errs, watts, active, mhz = [], [], [], []
+    prev = rep.sample()
+    for _ in range(3):
+        t0 = time.perf_counter()
+        time.sleep(1.0)
+        cur = rep.sample()
+        dt = time.perf_counter() - t0
+        d = rep.delta(prev, cur)
+        rep.release(prev)
+        prev = cur
+        errs.append(d["ticks"] / ioreport.TICKS_PER_S / dt - 1.0)
+        watts.append(ioreport.watts(d, dt))
+        active.append(ioreport.active_fraction(d) * 100)
+        mhz.append(ioreport.active_frequency_mhz(d, table))
+    rep.release(prev)
+    clock_ok = max(abs(e) for e in errs) < 0.02
+    energy_ok = all(w is not None for w in watts)
+    report("PASS" if clock_ok else "FAIL", "IOReport residency clock",
+           "24 MHz tick sum vs wall: %s (|err| < 2%% required)"
+           % ", ".join("%+.2f%%" % (e * 100) for e in errs))
+    report("PASS" if energy_ok else "INFO", "IOReport GPU energy",
+           "GPU Energy nJ counter -> %s W; active %s; %s"
+           % (", ".join("%.1f" % w for w in watts) if energy_ok else "absent",
+              ", ".join("%.0f%%" % a for a in active),
+              ", ".join("-" if m is None else "%.0f MHz" % m for m in mhz)))
+
+
 def main():
     print(BOLD + "stethoscope core.validate · probe contracts on this machine" + RESET)
     print(DIM + "  %s · %s" % (
@@ -329,6 +467,10 @@ def main():
     check_battery()
     check_pmset_cost()
     check_pmenergy()
+    check_proc_bsdinfo()
+    check_proc_state()
+    check_gpu_registry()
+    check_gpu_ioreport()
     print()
     fails = _results.count("FAIL")
     print(BOLD + "%d checks · %d FAIL" % (len(_results), fails) + RESET)

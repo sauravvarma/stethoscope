@@ -95,7 +95,11 @@ over what those three hold.
 stethoscope              dispatcher (unchanged)
 core/
   rusage.py              libproc bindings — extracted from disk.py, upgraded
-                         to RUSAGE_INFO_V4 (adds ri_billed_energy, QoS time)
+                         to RUSAGE_INFO_V4 (adds ri_billed_energy, QoS time);
+                         proc_pidinfo(PROC_PIDTBSDINFO) for proc_state
+  ioaccel.py             IORegistry GPU probe (accelerator stats, device
+                         clients, pmgr P-state table)
+  ioreport.py            IOReport probe (GPU residency + energy, no root)
   validate.py            probe-validation harness (§9 step 0): checks every
                          probe contract on the running machine
   sampling.py            Sampler: snapshot/diff/windowed-rate primitives
@@ -108,6 +112,8 @@ core/
 scopes/
   disk.py, disk_tui.py   (existing — disk.py's bindings migrate to core/)
   cpu.py, cpu_tui.py     cpu scope: data layer + CLI, and its live TUI
+  gpu.py                 gpu scope: device vitals + per-process GPU time +
+                         the unattributed share (casebook 0008)
   battery.py, battery_tui.py   battery scope: same pairing
 diagnosis/
   taxonomy.py            the culprit classes (§7) as data, not code
@@ -137,6 +143,9 @@ cheap enough to poll.** Heavier tools are reserved for the `inspect` tier.
 | `assertions` | `pmset -g assertions` | who is preventing sleep, and their stated reason | free, no root (~12 ms) |
 | `powermetrics` | `powermetrics --samplers tasks` | per-process energy impact as macOS itself scores it, P/E-core residency, per-process wakeup detail | **root**, heavy — `inspect` tier only |
 | `pmenergy` | `/usr/share/pmenergy/*.plist` | Apple's per-board coefficients for the Energy Impact formula (§5) — **unitless weights**, keyed by Intel board-id; Apple Silicon falls back to `default.plist` | free, read once |
+| `ioaccel` | `ioreg -c IOAccelerator -r -l -d 2 -a` | the accelerator node's `PerformanceStatistics` (Device/Renderer/Tiler Utilization %, GPU memory in use / allocated) **and** its per-process device clients in one call: `IOUserClientCreator` = "pid N, name", `CommandQueueCount`, `AppUsage[].accumulatedGPUTime` (cumulative ns, moves at 1 s cadence) and `lastSubmittedTime` (awake-time ns). The per-process GPU attribution `powermetrics` needs root for. A client survives its owner's exit, so a pid here may be a zombie — read `proc_state` (casebook 0008.5) | free, no root (10-20 ms) |
+| `ioreport` | `libIOReport.dylib` via ctypes: "GPU Stats"/"GPU Performance States" + "Energy Model"/"GPU Energy" | the channels behind `powermetrics --samplers gpu_power`: per-P-state residency in 24 MHz ticks (sum = interval, verified within 0.35 %) and a cumulative GPU energy counter in nJ (Δ/interval = watts, 30.8-44.9 W measured against powermetrics' 38.6-46.0 W). Private framework: degrades to None, never zero (casebook 0008.11) | free, no root, ~1 ms per sample |
+| `pmgr` | `ioreg -rn pmgr -a`, `voltage-states9` | the GPU performance-state table, (Hz, V) pairs OFF-first: `[0, 338, 486, …, 1578, 1620]` MHz on Mac17,9, exactly `powermetrics`' bins. Maps IOReport's `P<n>` to MHz | free, read once (15 ms) |
 
 Why these and not others: coalition/task-level APIs (`coalinfo`) are private
 and unstable; DTrace is SIP-blocked (same reasoning as the disk scope). The
@@ -483,8 +492,9 @@ baselines; they never touch probes.
 ### The taxonomy (`diagnosis/taxonomy.py`)
 
 Each class below is defined by its **evidence signature** — the combination of
-vitals that distinguishes it. These eight cover the culprits that actually
-occur; the set is data-driven and extensible.
+vitals that distinguishes it. These nine cover the culprits observed so far;
+the set is data-driven and extensible, and casebook 0008 is the record of
+one being added because a field diagnosis fell outside the previous eight.
 
 | Class | Evidence signature | Example (from a real diagnosis) |
 |---|---|---|
@@ -496,6 +506,7 @@ occur; the set is data-driven and extensible.
 | `io-churner` | energy driven by sustained disk rate rather than CPU (cross-scope: joins the **disk** scope's vitals) | runaway log writer, thrashing indexer |
 | `foreground-load` | high energy but frontmost/user-active app doing plausible work | a video export; a game — reported, ranked, **not alarmed** |
 | `unattributed-draw` | large reconciliation residual (§5) with no process signature | display brightness, GPU, hotspot radio |
+| `ownerless-draw` | the `gpu` scope's `unattributed` share ≫ its baseline (device active, live-process GPU% sum small) **and** a device client or sleep assertion held by a pid whose `proc_state` is `exited`/`gone` | a game that crashed under a compatibility layer leaving its context on the GPU: 100 % active, 40 W, 86 % unattributed, owner a zombie for 3 h (casebook 0008). Remediation: reboot; `reversible: false` |
 
 Two classes deserve a note on *why* they're separable:
 
