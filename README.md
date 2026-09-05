@@ -2,7 +2,7 @@
 
 **Vital signs for your Mac** — the sense of its own internal state.
 
-See exactly which process is hammering your disk, stalling on I/O, refusing to let a drive eject — or burning your CPU, with live per-process power. More vitals (memory, battery, drive health) on the roadmap.
+See exactly which process is hammering your disk, stalling on I/O, refusing to let a drive eject — or burning your CPU, with live per-process power — or what your GPU is doing at how many watts, and which process (living or dead) is holding it. More vitals (memory, battery, network, drive health) on the roadmap.
 
 ![stethoscope disk tui](assets/tui.svg)
 
@@ -32,6 +32,7 @@ sudo ./stethoscope disk inspect 12345           # why — live syscall trace of 
 sudo ./stethoscope disk busy "/Volumes/X9 Pro"  # which pids won't let it eject
 sudo -E ./stethoscope disk tui                  # full-screen interactive view
 sudo ./stethoscope cpu top                      # who is burning CPU right now
+./stethoscope gpu top                           # what the GPU is doing, at what wattage, and who holds it
 ```
 
 ## The `disk` scope
@@ -87,6 +88,29 @@ One live table, three time horizons per process — because "constantly hogging"
 
 Same sudo rule as `disk`: without root you see your own processes only.
 
+## The `gpu` scope
+
+```sh
+./stethoscope gpu top             # no root needed
+```
+
+The scope that closes the gap found in [casebook 0008](casebook/0008-gpu-unowned-draw.md): fans pinned, CPU, memory, disk and network all quiet, and 40 W going into a GPU that no living process owned. Everything `powermetrics --samplers gpu_power` prints for the GPU, read without root from the same kernel channels, plus the per-process table `powermetrics` needs root for:
+
+| Line / column | Meaning |
+|---|---|
+| `device: N% busy (renderer · tiler)` | the accelerator's own utilization counters |
+| `active N% @ N MHz` | residency outside the OFF state and the residency-weighted frequency, from the kernel's 24 MHz performance-state clock |
+| `N W` | live watts from the cumulative GPU energy counter |
+| `memory in use / alloc` | GPU memory the driver reports |
+| **`attributed` / `unattributed`** | how much of the busy time live processes account for, and how much nothing does. Small on a healthy machine. **Large, with an `exited` row below it, means a context whose owner died without releasing it; only a reboot reclaims it** |
+| `GPU%` | a process's share of the device this interval, from its cumulative GPU time |
+| `GPU TIME` | lifetime GPU time |
+| `QUEUES` | command queues the process holds |
+| `IDLE` | awake-time since its last submission |
+| `STATE` | blank when alive; `exited` when the kernel still holds a device client for a process that is a zombie; `gone` when there is no trace of the pid at all |
+
+Residency, frequency and watts read `-` on machines where the IOReport framework is unavailable, never a fabricated zero.
+
 ## Scopes & roadmap
 
 Each subsystem is a **scope** — a command namespace backed by a reusable data layer. `disk` is the first organ stethoscope knows how to examine:
@@ -95,11 +119,13 @@ Each subsystem is a **scope** — a command namespace backed by a reusable data 
 |---|---|---|
 | `disk` | **shipped** | per-process disk I/O, blocked syscalls, open-file holds, eject blockers |
 | `cpu` | **shipped** (`cpu top`) | who's pegging cores right now — %CPU, live watts, lifetime CPU time and duty; wakeup vitals in [v0.2](https://github.com/sauravvarma/stethoscope/milestone/1) |
+| `gpu` | **shipped** (`gpu top`) | what the GPU is doing at what wattage, who holds it, and how much of its busy time no living process accounts for; no root ([v0.2](https://github.com/sauravvarma/stethoscope/milestone/1)) |
 | `memory` | [v0.2](https://github.com/sauravvarma/stethoscope/milestone/1) | footprint, leak candidates |
-| `battery` | [v0.3](https://github.com/sauravvarma/stethoscope/milestone/2) | per-process energy impact — what's draining you |
+| `battery` | [v0.3](https://github.com/sauravvarma/stethoscope/milestone/2) | per-process energy impact — what's draining you; sleep-assertion holders, including ones whose process has exited ([casebook 0008.5](casebook/0008-gpu-unowned-draw.md)) |
 | `smart` | [v0.4](https://github.com/sauravvarma/stethoscope/milestone/3) | SMART data, drive wear, external-drive life expectancy |
+| `network` | [v0.4](https://github.com/sauravvarma/stethoscope/milestone/3) | per-process bytes in/out, connections, the radio-side of "why is this draining"; the one suspect of five no scope could clear on 2026-09-05 ([casebook 0009](casebook/0009-network-scope.md)) |
 
-On top of the scopes: [agent primitives](https://github.com/sauravvarma/stethoscope/milestone/4) (`--json` everywhere, one-shot sampling, a documented schema), [recording & baselines](https://github.com/sauravvarma/stethoscope/milestone/5) (what does *normal* look like on this machine), [anomaly detection](https://github.com/sauravvarma/stethoscope/milestone/6) (flag what deviates — leaks, runaway processes, `triage`), and [the doctor](https://github.com/sauravvarma/stethoscope/milestone/7) (`checkup`, MCP server, Homebrew core).
+On top of the scopes: [agent primitives](https://github.com/sauravvarma/stethoscope/milestone/4) (`--json` everywhere, one-shot sampling, a documented schema), [recording & baselines](https://github.com/sauravvarma/stethoscope/milestone/5) (what does *normal* look like on this machine), [anomaly detection](https://github.com/sauravvarma/stethoscope/milestone/6) (flag what deviates — leaks, runaway processes, a GPU busy with no living owner, `triage`), and [the doctor](https://github.com/sauravvarma/stethoscope/milestone/7) (`checkup`, MCP server, Homebrew core).
 
 ### For AI agents
 
@@ -144,12 +170,15 @@ They give the richest block-layer view (per-request latency, device queue) on pa
 ```
 stethoscope          the dispatcher — `stethoscope <scope> <command>`
 core/
-  rusage.py          the proc_pid_rusage probe — shared by every scope
+  rusage.py          the libproc probe: proc_pid_rusage, proc_pidinfo (process state) — shared by every scope
+  ioaccel.py         the IORegistry GPU probe: accelerator stats, per-process device clients, P-state table
+  ioreport.py        the IOReport probe: GPU performance-state residency and energy, no root
   validate.py        probe-validation harness (`python3 -m core.validate`)
 scopes/
   disk.py            disk scope: data layer + CLI commands (self-documenting header)
   disk_tui.py        disk scope: curses TUI over the same data layer
   cpu.py             cpu scope: data layer + CLI commands (self-documenting header)
+  gpu.py             gpu scope: data layer + CLI commands (self-documenting header)
 ```
 
 **The design rule:** each scope is one module exposing a **data layer** — pure functions returning structures — with thin **presentation** on top. The CLI and the TUI render the *same* functions; agent-facing output (`--json`) and anomaly detection will build on the data layer, never on rendered text. Fix a number in one place, every surface updates.

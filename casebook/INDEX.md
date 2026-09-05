@@ -11,4 +11,5 @@
 | [0005](0005-cpu-scope.md) | cpu scope — who is burning CPU now | treated | 2026-07-10 | 2026-07-10 | 8 |
 | [0006](0006-parallel-series-reconciliation.md) | reconciling the krishankumar95 parallel series | diagnosed | 2026-07-10 | 2026-07-10 | 7 |
 | [0007](0007-observer-effect-energy-proxy.md) | the energy proxy ranks its own observer | diagnosed | 2026-07-27 | 2026-09-05 | 12 |
-| [0008](0008-gpu-unowned-draw.md) | a 40 W GPU draw with no living owner | diagnosed | 2026-09-05 | 2026-09-05 | 10 |
+| [0008](0008-gpu-unowned-draw.md) | a 40 W GPU draw with no living owner | treated | 2026-09-05 | 2026-09-05 | 12 |
+| [0009](0009-network-scope.md) | network scope: the fifth suspect no scope can clear | open | 2026-09-05 | 2026-09-05 | 1 |

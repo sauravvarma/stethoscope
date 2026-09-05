@@ -1,5 +1,5 @@
 # Case 0008 — a 40 W GPU draw with no living owner
-status: diagnosed
+status: treated
 opened: 2026-09-05
 links: case 0001 · case 0007 · ARCHITECTURE.md §3 · §5 · §7 · Appendix A A8
 touches: (none yet — no scope reads the GPU)
@@ -304,3 +304,139 @@ One methodological note, extending 0007.10's: this diagnosis was performed
 own absence from a successful field diagnosis on its author's machine is the
 strongest available argument about where the gap is. Case 0007 at least had
 `battery top` producing a wrong answer; here there was nothing to run.
+
+## 0008.11 · 2026-09-05 · decision — build the `gpu` scope (0008.6), with two discoveries that changed the options
+
+Chosen: option 0008.6, a `gpu` scope with its own probes, shipped as
+`stethoscope gpu top`. Two facts found while building it invalidate the
+main objection recorded against it and one of 0008.10's premises:
+
+**The GPU is not device-global only.** 0008.6's issue was that the IOAccelerator
+probe "answers 'the GPU is saturated' and never 'by whom'". The same
+`ioreg -c IOAccelerator -r -l -d 2 -a` call returns the accelerator's children:
+54 `AGXDeviceUserClient` entries, each with `IOUserClientCreator = "pid N,
+name"`, `CommandQueueCount`, and per-queue `accumulatedGPUTime` in ns. Diffed at
+1 s, WindowServer read 111.7 ms/s (11.2 %) while compositing; 2 of 52 clients
+moved in a quiet interval. That is per-process GPU attribution, free, 10-20 ms.
+And pid 5671 was in the list: 1 client, **40 command queues, 4,722,950,445,870
+ns (78.7 min) of GPU time, delta 0**. The leak had a row all along.
+
+**Root is not required for residency, frequency or watts.** 0008.10(d) held
+that per-process GPU attribution, and by extension the powermetrics numbers,
+were out of reach for an agent. `libIOReport.dylib` loads via ctypes without
+privilege and publishes the channels powermetrics reads: "GPU Stats"/"GPU
+Performance States" (OFF, P1..P15, residency in 24 MHz ticks) and "Energy
+Model"/"GPU Energy" (cumulative nJ). The P-state table is in `pmgr`
+`voltage-states9`: `[0, 338, 486, 636, 796, 888, 988, 1084, 1182, 1278, 1374,
+1470, 1578, 1620]` MHz, which is powermetrics' bin list exactly. 0007.12's
+constraint stands for `--samplers tasks` (per-process wakeups, energy impact)
+but no longer applies to the GPU.
+
+Rejected:
+
+- **0008.7 (GPU vitals inside `battery`).** The disqualifier holds: `battery`
+  degrades to "no battery" on desktops (S4) and GPU saturation is a real
+  diagnosis on a Mac Studio. A universally available vital does not belong
+  under a scope that is absent on some hardware.
+- **0008.8 (route `unattributed-draw`, add no probe).** Disqualified by its
+  own trigger: §5's residual is gated on discharging and this diagnosis was on
+  AC. The gpu scope computes the same idea from a different pair of numbers
+  that exist on any power source: device active minus the sum of live-process
+  shares.
+- **0008.9 as the whole answer.** Taken as a part instead: `proc_state`
+  (below) is the liveness primitive 0008.9 asked for, and the `STATE` column
+  is its first consumer. Integration with the assertions probe is left to
+  0007.7 / v0.3, as 0008.10(c) sequenced it.
+
+What the decision fixes into the design:
+
+- The 0008.10(a) schema question is answered by practice: a scope may have
+  device-global vitals with no pid dimension (`active_pct`, `watts`,
+  `freq_mhz`) alongside per-pid rows, and the *difference* between the two is
+  itself a vital. `unattributed_pct = busy - Σ gpu_pct` is the ownerless-draw
+  signal; it read 86.0-86.3 % on this machine at every sample.
+- A new libproc primitive, `core.rusage.proc_state(pid)` → alive / exited /
+  gone / unknown, from `proc_pidinfo(PROC_PIDTBSDINFO)` errno plus rusage.
+  Full-struct `proc_bsdinfo` (136 B, header-checked), per case 0003. The
+  kernel refuses bsdinfo for a zombie with ESRCH while rusage still answers,
+  which is the tri-state's load-bearing distinction; EPERM is "alive, not
+  ours", never "gone" (a first draft rendered root's WindowServer as gone).
+- ctypes discipline recorded as a constraint: every IOReport getter declares
+  `argtypes`. Without them Python ints pass as 32-bit C ints, the CFTypeRef is
+  truncated, and the process segfaults at the first channel (observed, exit
+  139).
+- Frequency is keyed by the state's own number (`P11` → table[11]), not its
+  list position; a synthetic test with a gap caught the position-based first
+  draft shifting every bin.
+- `IDLE` is awake-time (casebook 0003.7); the clock is read after the registry
+  so no age is negative (a first frame showed `-0.0s`).
+- Invariants preserved: structures below the surface, "-" never a fabricated
+  zero (IOReport unavailable → active/MHz/watts are None), full kernel structs.
+
+Status → `treated`. The 0008.12 follow-up carries the verification.
+
+## 0008.12 · 2026-09-05 · follow-up — verification of `gpu top` against the live leak
+
+Built and verified while the leaked context was still resident, so the
+pathology this case documents was the test fixture.
+
+`python3 -m core.validate`, 15 checks, 0 FAIL. The new ones:
+
+```
+PASS  proc_bsdinfo struct          22 fields match SDK header, sizeof 136 == 136
+PASS  proc_state                   unreaped child: bsdinfo status=None errno=3 rusage=OK -> exited;
+                                   after reap -> gone; pid 1 (launchd, not ours) -> unknown
+PASS  IOAccelerator                Apple M5 Pro (20 cores) AGXAcceleratorG17X; util 100%;
+                                   52 device clients, 15 holding queues; 22 ms per snapshot
+      clients whose owner has exited: [(5671, 'GTA5_Enhanced.ex', 40)]
+PASS  pmgr GPU P-states            14 states, OFF first: [0, 338, ..., 1578, 1620] MHz; 15 ms
+PASS  IOReport residency clock     24 MHz tick sum vs wall: -0.14%, +0.20%, +0.34%
+PASS  IOReport GPU energy          GPU Energy nJ counter -> 30.8, 36.2, 37.7 W;
+                                   active 100%, 100%, 100%; 1456 MHz, 1528 MHz, 1544 MHz
+```
+
+The `proc_state` check forks a real child and leaves it unreaped: the kernel's
+behaviour for a zombie is reproduced on demand rather than depending on this
+machine's leak.
+
+`python3 -m unittest discover tests`: 67 tests, OK (33 existing + 34 new).
+The new tests pin: the diff math and first-sight baseline; pid reuse under a
+new name baselining fresh; negative deltas and negative idle clamped; idle
+clients without queues dropped while an exited holder at 0 % is kept (the
+diagnostic row); `unattributed` falling back to device utilization when
+IOReport is absent and clamping at 0; every IOReport-derived value rendering
+"-" when unavailable; the struct against the SDK header; the residency clock
+within 5 % of wall over 0.5 s; state-number keyed frequency mapping.
+
+`./stethoscope disk top`: output shape unchanged.
+
+The live frame at 17:23:34:
+
+```
+device: 100% busy (renderer 100% · tiler 100%)   active 100.0% @ 1533 MHz   36.7 W
+        memory 8.2G in use / 10.1G alloc
+attributed to live processes 13.7%   unattributed 86.3%   (device busy with no live owner: a leaked context?)
+        1470MHz 45%  1578MHz 46%  1620MHz 9%
+
+    PID  COMMAND                    GPU%  GPU TIME QUEUES      IDLE  STATE
+    592  WindowServer               11.1     9m02s      4      0.0s
+  12029  iTerm2                      2.6     25.3s      2      0.1s
+   5671  GTA5_Enhanced.ex            0.0     1h18m     40     2h07m  exited
+```
+
+Against the root `powermetrics` output the operator pasted at 16:31 (0008.2):
+active residency 100 % vs 100.00 %; frequency 1533 MHz vs 1552-1619 MHz;
+watts 36.7 vs 38.6-46.0 W. The samples are ~50 min apart, so this is
+agreement in band, not a simultaneous cross-check. A simultaneous one (root
+powermetrics in a terminal beside `gpu top`) is the remaining verification
+and needs a human at a TTY (0007.12).
+
+Two things the frame says that no single probe does: 86.3 % of a saturated
+GPU is attributed to no live process, and the only exited row holds 40
+queues. That is the diagnosis of 0008.3 in two lines, produced by the tool,
+on the machine, without root.
+
+Left open: a simultaneous powermetrics cross-check; multi-accelerator Macs
+(only the first node is rendered); `--json` (v0.5) and a `gpu_tui.py`; the
+assertions probe integration (0007.7) so the `sleep-blocker` finding can
+carry `proc_state` too.
