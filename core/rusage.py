@@ -47,6 +47,14 @@ _libc.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
 _libc.proc_pid_rusage.restype = ctypes.c_int
 _libc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
 _libc.proc_pidpath.restype = ctypes.c_int
+_libc.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                               ctypes.c_void_p, ctypes.c_int]
+_libc.proc_pidinfo.restype = ctypes.c_int
+
+PROC_PIDTBSDINFO = 3
+MAXCOMLEN = 16
+# pbi_status values (sys/proc.h)
+SIDL, SRUN, SSLEEP, SSTOP, SZOMB = 1, 2, 3, 4, 5
 
 
 class RUsageInfoV4(ctypes.Structure):
@@ -311,3 +319,85 @@ def proc_name(pid):
         name = "?"
     _name_cache[pid] = name
     return name
+
+
+# ---------------------------------------------------------------------------
+# process status: proc_pidinfo(PROC_PIDTBSDINFO)
+# ---------------------------------------------------------------------------
+
+class ProcBSDInfo(ctypes.Structure):
+    """struct proc_bsdinfo: complete, matching the SDK's sys/proc_info.h.
+
+    Same rule as the rusage structs (S9, casebook 0003): declared in full,
+    136 bytes, sizeof-asserted below and checked against the header by
+    core.validate. uid_t/gid_t are uint32 on macOS.
+    """
+    _fields_ = [
+        ("pbi_flags", ctypes.c_uint32),
+        ("pbi_status", ctypes.c_uint32),
+        ("pbi_xstatus", ctypes.c_uint32),
+        ("pbi_pid", ctypes.c_uint32),
+        ("pbi_ppid", ctypes.c_uint32),
+        ("pbi_uid", ctypes.c_uint32),
+        ("pbi_gid", ctypes.c_uint32),
+        ("pbi_ruid", ctypes.c_uint32),
+        ("pbi_rgid", ctypes.c_uint32),
+        ("pbi_svuid", ctypes.c_uint32),
+        ("pbi_svgid", ctypes.c_uint32),
+        ("rfu_1", ctypes.c_uint32),
+        ("pbi_comm", ctypes.c_char * MAXCOMLEN),
+        ("pbi_name", ctypes.c_char * (2 * MAXCOMLEN)),
+        ("pbi_nfiles", ctypes.c_uint32),
+        ("pbi_pgid", ctypes.c_uint32),
+        ("pbi_pjobc", ctypes.c_uint32),
+        ("e_tdev", ctypes.c_uint32),
+        ("e_tpgid", ctypes.c_uint32),
+        ("pbi_nice", ctypes.c_int32),
+        ("pbi_start_tvsec", ctypes.c_uint64),
+        ("pbi_start_tvusec", ctypes.c_uint64),
+    ]
+
+
+assert ctypes.sizeof(ProcBSDInfo) == 136, ctypes.sizeof(ProcBSDInfo)
+
+
+ALIVE, EXITED, GONE, UNKNOWN = "alive", "exited", "gone", "unknown"
+_EPERM, _ESRCH = 1, 3
+
+
+def proc_status(pid):
+    """(pbi_status, errno). pbi_status is SRUN/SSLEEP/... or None when the
+    kernel would not describe the pid, in which case errno says why:
+    EPERM (alive, another user's process) or ESRCH (no such task)."""
+    info = ProcBSDInfo()
+    ctypes.set_errno(0)
+    n = _libc.proc_pidinfo(ctypes.c_int(pid), PROC_PIDTBSDINFO, 0,
+                           ctypes.byref(info), ctypes.sizeof(info))
+    if n != ctypes.sizeof(info):
+        return None, ctypes.get_errno()
+    return info.pbi_status, 0
+
+
+def proc_state(pid):
+    """One of ALIVE / EXITED / GONE / UNKNOWN for a pid another kernel
+    registry still names (a GPU device client, a power assertion).
+
+    The kernel refuses PROC_PIDTBSDINFO for a zombie with ESRCH, yet the
+    same zombie still answers proc_pid_rusage and still sits in the process
+    table (ps shows it as 'Z'). So:
+
+        bsdinfo OK                        -> ALIVE (SZOMB -> EXITED)
+        ESRCH and rusage still answers    -> EXITED: an unreaped zombie
+        ESRCH and rusage refuses          -> GONE:   no trace of the pid
+        EPERM                             -> UNKNOWN: alive, not ours to read
+
+    Measured on 2026-09-05 against pid 5671, a GTA5 zombie that still held
+    40 GPU command queues and a display-sleep assertion (casebook 0008.5,
+    0008.11): bsdinfo ESRCH, rusage OK, i.e. EXITED.
+    """
+    status, err = proc_status(pid)
+    if status is not None:
+        return EXITED if status == SZOMB else ALIVE
+    if err == _EPERM:
+        return UNKNOWN
+    return EXITED if _raw_rusage(pid) is not None else GONE
