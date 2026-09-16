@@ -356,3 +356,64 @@ This does not weaken 0007.10's methodological note, it compounds it. The agent
 both perturbs the measurement (0007.2), changes the power state of the system
 under measurement (0007.11), and cannot access the instrument that would
 adjudicate either (this entry).
+
+## 0007.13 · 2026-09-17 · follow-up — the observer fabricated the signal it then reported
+
+Case 0010 diagnosed a 17.6 W idle drain on this machine and hit this node
+twice: once as the subject, once as a measurement error that reached a
+conclusion before it was caught.
+
+**The observer was the assertion.** 0007.11 recorded that the observer holds a
+sleep assertion. 0010.3 traced the holder by parent and found it is not
+incidental to the agent, it *is* the agent:
+
+```
+69476  caffeinate -i -t 300
+  └─ 68855  claude
+       └─ 68804  -zsh
+```
+
+Renewed on a rolling 300 s lease for the life of the session, with a new pid
+each time (68954, then 69476), so any single `pmset` snapshot reads as a
+transient. The operator's complaint was that the battery drains with nothing
+running. The process falsifying that sentence was the one asked to explain it.
+
+**The observer also manufactured a metric.** Worse than ranking high: a
+wakeup rate was reported that the measurement itself produced.
+
+```
+top -l 3 -s 2 -pid 67940 -stats idlew
+  4176697  ->  4177624 (+927)  ->  4178555 (+931)      = 464 wakeups/s
+```
+
+464/s was written up as "the smoking gun", in those words, against a threshold
+of roughly 150/s. The same counter differenced over a single 60 s window with
+no `top` in the loop:
+
+```
+210 wakeups / 60 s = 4 /s
+```
+
+**A factor of 116.** The lifetime average (4,242,076 over 12 h 23 m = 95/s) is
+dominated by the hours the bottle was genuinely in use and corroborates the
+low figure for the idle period, not the high one. `top` polling a Rosetta
+process wakes it, and the wakes were billed to the subject.
+
+This extends the node rather than repeating it. 0007.2 established that the
+observer *ranks* high in a proxy. 0007.11 established that it *changes the
+power state*. This entry establishes that it can *originate a counter's
+increments and have them attributed to the process under test* — an
+observer effect not on the ranking but on the underlying event stream, which
+no reweighting of coefficients can correct.
+
+The operational lesson is narrower than the methodological one and should
+reach §3: **`top`-derived deltas are not a valid instrument for wakeup rates
+on a process the same `top` is sampling.** The `idlew` counter must be read
+by differencing two widely separated single-shot reads, or by a probe outside
+the sampler's own wake path. 0004 selected a wakeup counter for the
+wakeup-storm alarm on the strength of its signal; this entry constrains how
+that counter may be sampled, and a `wakeup-storm` alarm built on a polling
+loop would fire on its own polling.
+
+Both errors were caught and corrected inside the same session, which is the
+only reassuring part of the entry, and neither was caught by the tool.
