@@ -188,7 +188,7 @@ def cmd_inspect(pid):
     print()
 
     # -f filesys narrows to filesystem syscalls; -w widens columns; -e excludes self.
-    cmd = ["/usr/bin/fs_usage", "-w", "-f", "filesys", "-p", str(pid)]
+    cmd = ["/usr/bin/fs_usage", "-w", "-f", "filesys", str(pid)]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             bufsize=1, universal_newlines=True)
     try:
